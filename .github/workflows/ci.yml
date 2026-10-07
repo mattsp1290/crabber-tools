@@ -82,6 +82,7 @@ jobs:
         shell: bash
         run: |
           cp -R ci/consumer-probe "$RUNNER_TEMP/probe"
+          cp examples/mount-standard/src/probe.rs "$RUNNER_TEMP/probe/src/probe.rs"
           sed -i "s/CRABBER_TOOLS_REV/$GITHUB_SHA/g" "$RUNNER_TEMP/probe/Cargo.toml" "$RUNNER_TEMP/probe/Cargo.lock"
           mkdir -p "$RUNNER_TEMP/probe/.cargo"
           cp .cargo/config.toml "$RUNNER_TEMP/probe/.cargo/config.toml"

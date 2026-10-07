@@ -112,3 +112,15 @@ This is the first deliverable for request `crabber-r-5fxy`. Release tagging and
 the consumer's flows-guest probe follow merge and green CI. The second deliverable
 (`glob`, `apply_patch`, `url_fetch`, `tracker_write`) remains gated on that release,
 the request update, and the owner's URL/tracker policy decisions.
+
+To materialize the standalone consumer outside this workspace, copy both the
+template and its canonical harness, then replace `CRABBER_TOOLS_REV` in the
+scratch manifest and lockfile with the published commit SHA:
+
+```sh
+probe_dir=$(mktemp -d)
+cp -R ci/consumer-probe/. "$probe_dir/"
+cp examples/mount-standard/src/probe.rs "$probe_dir/src/probe.rs"
+```
+
+CI performs these same copies before its locked graph check and probe run.
