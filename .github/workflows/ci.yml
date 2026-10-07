@@ -1,0 +1,96 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CRABBER_READ_TOKEN: ${{ secrets.CRABBER_READ_TOKEN }}
+      CRABBER_TOOLS_REQUIRE_LOGIN_PROFILE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure private dependency access
+        shell: bash
+        run: |
+          if [ -z "$CRABBER_READ_TOKEN" ]; then
+            echo 'Configure CRABBER_READ_TOKEN with read access to crabber, crabber-extensions, and crabber-tools.' >&2
+            exit 1
+          fi
+          for repo in crabber crabber-extensions crabber-tools; do
+            git config --global "url.https://github.com/mattsp1290/$repo.git.insteadOf" "ssh://git@github.com/mattsp1290/$repo.git"
+          done
+          git config --global credential.https://github.com.helper '!f() { printf "%s\n" "username=x-access-token" "password=$CRABBER_READ_TOKEN"; }; f'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Install ripgrep
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y ripgrep; else brew install ripgrep; fi
+          major=$(rg --version | head -1 | cut -d' ' -f2 | cut -d. -f1)
+          test "$major" -ge 14
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+      - name: Host probe
+        run: cargo run -p mount-standard --locked -- --check
+      - name: Forbidden constructs
+        shell: bash
+        run: |
+          if git grep -nE '\bunsafe\s*(\{|fn|impl|trait)' -- '*.rs'; then exit 1; fi
+  consumer-probe:
+    if: github.event_name == 'push' && vars.CONSUMER_PROBE == 'true'
+    needs: check
+    runs-on: ubuntu-latest
+    env:
+      CRABBER_READ_TOKEN: ${{ secrets.CRABBER_READ_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure private dependency access
+        shell: bash
+        run: |
+          if [ -z "$CRABBER_READ_TOKEN" ]; then
+            echo 'Configure CRABBER_READ_TOKEN with read access to crabber, crabber-extensions, and crabber-tools.' >&2
+            exit 1
+          fi
+          for repo in crabber crabber-extensions crabber-tools; do
+            git config --global "url.https://github.com/mattsp1290/$repo.git.insteadOf" "ssh://git@github.com/mattsp1290/$repo.git"
+          done
+          git config --global credential.https://github.com.helper '!f() { printf "%s\n" "username=x-access-token" "password=$CRABBER_READ_TOKEN"; }; f'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Install ripgrep
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y ripgrep; else brew install ripgrep; fi
+          major=$(rg --version | head -1 | cut -d' ' -f2 | cut -d. -f1)
+          test "$major" -ge 14
+      - name: Materialize consumer at this exact revision
+        shell: bash
+        run: |
+          cp -R ci/consumer-probe "$RUNNER_TEMP/probe"
+          sed -i "s/CRABBER_TOOLS_REV/$GITHUB_SHA/g" "$RUNNER_TEMP/probe/Cargo.toml" "$RUNNER_TEMP/probe/Cargo.lock"
+          mkdir -p "$RUNNER_TEMP/probe/.cargo"
+          cp .cargo/config.toml "$RUNNER_TEMP/probe/.cargo/config.toml"
+      - name: Check single Crabber graph
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/probe"
+          cargo tree -d --locked > duplicates.txt
+          if rg '^crabber v' duplicates.txt; then cat duplicates.txt; exit 1; fi
+      - name: Run consumer probe
+        shell: bash
+        run: cd "$RUNNER_TEMP/probe" && cargo run --locked
