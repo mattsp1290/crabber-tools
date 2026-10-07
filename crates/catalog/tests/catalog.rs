@@ -250,3 +250,12 @@ async fn all_six_tools_execute_and_probe() {
     probe::run(false, None).await.unwrap();
     probe::run(true, None).await.unwrap();
 }
+
+#[test]
+fn consumer_probe_copies_stay_in_sync() {
+    assert_eq!(
+        include_str!("../../../examples/mount-standard/src/probe.rs"),
+        include_str!("../../../ci/consumer-probe/src/probe.rs"),
+        "update both consumer-shaped probe copies together",
+    );
+}

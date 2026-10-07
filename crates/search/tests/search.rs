@@ -267,3 +267,30 @@ async fn runtime_interrupt_reaps_group() {
     assert_gone(pid(&tmp.path().join("child"))).await;
     agent.close_extensions().await.unwrap();
 }
+
+#[tokio::test]
+async fn truncated_submatch_ranges_and_literal_parity() {
+    let tmp = tempfile::tempdir().unwrap();
+    for prefix in [4094, 4500] {
+        std::fs::write(
+            tmp.path().join("text"),
+            format!("{}needle", "x".repeat(prefix)),
+        )
+        .unwrap();
+        let v = call(
+            options(tmp.path()),
+            json!({"pattern":"needle","path":"text"}),
+        )
+        .await;
+        assert_eq!(v["match_count"], 1);
+        assert_eq!(v["matches"][0]["line_truncated"], true);
+        assert_eq!(v["matches"][0]["submatches"], json!([]));
+    }
+    std::fs::write(tmp.path().join("text"), "needle").unwrap();
+    let v = call(
+        options(tmp.path()),
+        json!({"pattern":"needle","path":"text","literal":true}),
+    )
+    .await;
+    assert_eq!(v["matches"][0]["submatches"], json!([]));
+}

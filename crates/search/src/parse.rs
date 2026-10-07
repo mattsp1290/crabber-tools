@@ -36,9 +36,10 @@ pub(crate) struct Parser {
     before: VecDeque<Value>,
     context: usize,
     limit: usize,
+    include_submatches: bool,
 }
 impl Parser {
-    pub fn new(context: usize, limit: usize) -> Self {
+    pub fn new(context: usize, limit: usize, include_submatches: bool) -> Self {
         Self {
             matches: vec![],
             reason: None,
@@ -46,6 +47,7 @@ impl Parser {
             before: VecDeque::new(),
             context,
             limit,
+            include_submatches,
         }
     }
     pub fn feed(&mut self, record: &[u8]) {
@@ -87,22 +89,17 @@ impl Parser {
                 let path = path.strip_prefix("./").unwrap_or(&path);
                 let mut v = line(data);
                 v["path"] = json!(path);
-                let mut subs = vec![];
-                let mut sub_bytes = 2usize;
-                if let Some(submatches) = data["submatches"].as_array() {
-                    for sub in submatches {
-                        let text = decode(&sub["match"]);
-                        let (text, _) = cut(&text);
-                        let item = json!({"text":text,"start":sub["start"],"end":sub["end"]});
-                        sub_bytes += serde_json::to_vec(&item).unwrap().len() + 1;
-                        if sub_bytes > MAX_RESULT_BYTES {
-                            self.reason = Some("bytes");
-                            return;
-                        }
-                        subs.push(item);
+                match crate::submatches::retained(
+                    data,
+                    v["line"].as_str().unwrap(),
+                    self.include_submatches,
+                ) {
+                    Some(subs) => v["submatches"] = json!(subs),
+                    None => {
+                        self.reason = Some("bytes");
+                        return;
                     }
                 }
-                v["submatches"] = json!(subs);
                 if !self.before.is_empty() {
                     v["before"] = json!(self.before);
                     self.before.clear();

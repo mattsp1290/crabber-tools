@@ -1,6 +1,8 @@
 # Tool contract
 
-A success carries `outcome: "succeeded"` and omits `error`. A model-facing failure
+A success carries `outcome: "succeeded"` and normally omits `error`. Search partial
+successes carry `partial: true` and a sanitized `exec_failed` error; retain their
+collected matches. A model-facing failure
 carries `outcome: "failed"` and `error: {category, message}`. Shell nonzero exits
 remain successful calls; read `exit_code`. Tool timeouts are failed/timeout with
 `timed_out: true`; `timed_out` and `rejected` outcomes are reserved for callers.
@@ -13,8 +15,10 @@ the default AgentConfig directory `.` fails with `workspace_mismatch`. Reopen
 WorkspaceRoot after replacing the directory at the same path. Relative in-root
 symlinks work; absolute targets (even in-root) and escaping targets fail with
 `path_escape`. Parent traversal is rejected syntactically. Hard links are a host
-concern. Filesystem operations run as the host uid, preserving mode and ownership
-on atomic writes; new files use 0644. A crash may leave a `.crabber-tools-tmp-*`
+concern. Filesystem operations run as the host uid and preserve mode on atomic
+writes; new files use 0644. Ownership is copied when the host is root or the
+desired owner is the host uid; an attempted chown failure returns `io`. Other
+unprivileged replacements keep the new file’s host ownership. A crash may leave a `.crabber-tools-tmp-*`
 sibling, visible to file_list. Writes sync their temp file before rename.
 
 Cancellation produces no model-facing result: Crabber drops the executor future.
@@ -28,7 +32,8 @@ children that close their pipes are not tracked; hosts own their lifecycle.
 Mutating tools (write, edit, shell) share a process-global lock keyed by canonical
 root. Read, list and search take capacity only and are unordered against writes.
 One deadline bounds the combined lock and capacity wait; expiry is `unavailable`.
-Sorted directory listings retain at most 5000 names per directory; enumeration
+Sorted directory listings use an iterative traversal with at most 5000 pending
+names across the entire tree and a constant number of open directories; enumeration
 must inspect directory names to establish ordering, even after the output cap.
 
 Registering only enabled tools is the per-node allowlist. `restrict_to_enabled`
@@ -278,7 +283,7 @@ Search workspace files via ripgrep. Defaults to regex mode and preserves existin
 
 Success keys: outcome, matches, match_count, duration_ms; optional truncated, truncation_reason, partial, timed_out, error. Matches carry path, line_number, line, submatches [{text,start,end}], optional line_truncated, before and after.
 
-Limits: 60s default/600s maximum; 200 default/1000 maximum matches; context maximum 20; line cap 4 KiB, serialized matches 256 KiB, JSON record 8 MiB, stderr 4 KiB. Non-UTF-8 paths/lines decode lossily. Limit or byte truncation succeeds; failed rg after matches yields partial success.
+Limits: 60s default/600s maximum; 200 default/1000 maximum matches; context maximum 20; line cap 4 KiB, serialized matches 256 KiB, JSON record 8 MiB, stderr 4 KiB. Non-UTF-8 paths/lines decode lossily. Submatch offsets index UTF-8 bytes in the returned line; ranges beyond retained text are omitted, and literal mode returns no submatches. Limit or byte truncation succeeds; failed rg after matches yields partial success.
 
 Failure categories: validation, path_escape, not_found, is_directory, not_directory, io, unknown, workspace_mismatch, unavailable, timeout, exec_failed, invalid_pattern.
 

@@ -63,7 +63,7 @@ pub(crate) async fn run(options: &Options, args: Args) -> Value {
         Ok(g) => g,
         Err(_) => {
             return result(
-                Parser::new(args.context, args.limit),
+                Parser::new(args.context, args.limit, !args.literal),
                 start,
                 false,
                 true,
@@ -77,7 +77,7 @@ pub(crate) async fn run(options: &Options, args: Args) -> Value {
     let mut diagnostic = CappedOutput::default();
     let mut error_chunk = [0; 4096];
     let mut record = vec![];
-    let mut parser = Parser::new(args.context, args.limit);
+    let mut parser = Parser::new(args.context, args.limit, !args.literal);
     let (mut out_eof, mut err_eof) = (false, false);
     let mut status = None;
     let mut timed_out = false;

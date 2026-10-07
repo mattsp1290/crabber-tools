@@ -11,6 +11,7 @@ mod args;
 mod info;
 mod parse;
 mod rg;
+mod submatches;
 pub use info::info;
 /// Default per-call timeout.
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
