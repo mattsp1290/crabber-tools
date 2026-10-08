@@ -91,9 +91,15 @@ async fn modes_context_globs_limits_and_runtime() {
 }
 #[tokio::test]
 async fn non_utf8_and_caps() {
+    #[cfg(not(target_os = "macos"))]
     use std::os::unix::ffi::OsStringExt;
     let tmp = tempfile::tempdir().unwrap();
+    // The macOS CI filesystem rejects invalid-UTF-8 names. Exercise raw
+    // content here; parse.rs covers base64-encoded paths on every platform.
+    #[cfg(not(target_os = "macos"))]
     let name = std::ffi::OsString::from_vec(b"bad\xff.txt".to_vec());
+    #[cfg(target_os = "macos")]
+    let name = std::ffi::OsString::from("bad.txt");
     std::fs::write(tmp.path().join(name), b"match \xff\n").unwrap();
     let v = call(options(tmp.path()), json!({"pattern":"match"})).await;
     assert_eq!(v["match_count"], 1);
@@ -103,6 +109,7 @@ async fn non_utf8_and_caps() {
             .unwrap()
             .contains('\u{fffd}')
     );
+    #[cfg(not(target_os = "macos"))]
     assert!(
         v["matches"][0]["path"]
             .as_str()

@@ -16,17 +16,15 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
-      - name: Configure private dependency access
+      - name: Configure dependency access
         shell: bash
         run: |
-          if [ -z "$CRABBER_READ_TOKEN" ]; then
-            echo 'Configure CRABBER_READ_TOKEN with read access to crabber, crabber-extensions, and crabber-tools.' >&2
-            exit 1
-          fi
           for repo in crabber crabber-extensions crabber-tools; do
             git config --global "url.https://github.com/mattsp1290/$repo.git.insteadOf" "ssh://git@github.com/mattsp1290/$repo.git"
           done
-          git config --global credential.https://github.com.helper '!f() { printf "%s\n" "username=x-access-token" "password=$CRABBER_READ_TOKEN"; }; f'
+          if [ -n "$CRABBER_READ_TOKEN" ]; then
+            git config --global credential.https://github.com.helper '!f() { printf "%s\n" "username=x-access-token" "password=$CRABBER_READ_TOKEN"; }; f'
+          fi
       - name: Install pinned Rust
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Install ripgrep
@@ -59,17 +57,15 @@ jobs:
       CRABBER_READ_TOKEN: ${{ secrets.CRABBER_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - name: Configure private dependency access
+      - name: Configure dependency access
         shell: bash
         run: |
-          if [ -z "$CRABBER_READ_TOKEN" ]; then
-            echo 'Configure CRABBER_READ_TOKEN with read access to crabber, crabber-extensions, and crabber-tools.' >&2
-            exit 1
-          fi
           for repo in crabber crabber-extensions crabber-tools; do
             git config --global "url.https://github.com/mattsp1290/$repo.git.insteadOf" "ssh://git@github.com/mattsp1290/$repo.git"
           done
-          git config --global credential.https://github.com.helper '!f() { printf "%s\n" "username=x-access-token" "password=$CRABBER_READ_TOKEN"; }; f'
+          if [ -n "$CRABBER_READ_TOKEN" ]; then
+            git config --global credential.https://github.com.helper '!f() { printf "%s\n" "username=x-access-token" "password=$CRABBER_READ_TOKEN"; }; f'
+          fi
       - name: Install pinned Rust
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Install ripgrep

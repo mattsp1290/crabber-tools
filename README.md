@@ -6,8 +6,8 @@ host-chosen subset with bounded work, capability-rooted file access, and process
 group cleanup on cancellation. Unix only; Rust 2024, toolchain 1.99.0.
 
 Depend on `crabber-tools-catalog` at an immutable git revision. This workspace
-pins Crabber at `6c59b01103849bde1179a6f0ea818c5a7b516820`, matching
-crabber-extensions `4aff0e0fb7be0ab44125ef6c43c47f47c8565e54`. All three must use
+pins Crabber at `883189465397b2fd326a6ef358c8a2fbd39fbec8`, matching
+crabber-extensions `8c611687723a79944226fa61501be64e4e81a74f`. All three must use
 one Crabber revision. Private sources require SSH read access locally; CI needs
 `CRABBER_READ_TOKEN` with read access to crabber, crabber-extensions and
 crabber-tools. Enable the `CONSUMER_PROBE=true` repository variable for the
