@@ -126,3 +126,27 @@ impl Parser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_base64_paths_and_lines_lossily() {
+        let mut parser = Parser::new(0, 10, true);
+        let record = json!({
+            "type": "match",
+            "data": {
+                "path": {"bytes": STANDARD.encode(b"./bad\xff.txt")},
+                "lines": {"bytes": STANDARD.encode(b"match \xff\n")},
+                "line_number": 1,
+                "submatches": []
+            }
+        });
+        parser.feed(&serde_json::to_vec(&record).unwrap());
+        assert!(!parser.malformed);
+        assert_eq!(parser.matches.len(), 1);
+        assert_eq!(parser.matches[0]["path"], "bad\u{fffd}.txt");
+        assert_eq!(parser.matches[0]["line"], "match \u{fffd}");
+    }
+}
