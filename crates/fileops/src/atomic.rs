@@ -1,11 +1,8 @@
 //! Temp siblings, preserved modes and ownership, and atomic rename through capabilities.
-use crate::{NEW_FILE_MODE, TEMP_PREFIX};
+use crate::NEW_FILE_MODE;
+use cap_std::fs::Dir;
 use cap_std::fs::PermissionsExt;
-use cap_std::fs::{Dir, OpenOptions, Permissions};
-use std::{
-    io::{self, Write},
-    path::Path,
-};
+use std::{io, path::Path};
 
 pub(crate) fn write(dir: &Dir, target: &Path, bytes: &[u8]) -> io::Result<bool> {
     let target = match dir.symlink_metadata(target) {
@@ -38,25 +35,13 @@ pub(crate) fn write(dir: &Dir, target: &Path, bytes: &[u8]) -> io::Result<bool> 
         .as_ref()
         .map(|m| m.permissions().mode())
         .unwrap_or(NEW_FILE_MODE);
-    let temp = crabber_tools_core::temp_name(TEMP_PREFIX)?;
-    let mut file = parent.open_with(&temp, OpenOptions::new().write(true).create_new(true))?;
-    let result = (|| {
-        use cap_std::fs::MetadataExt;
-        let uid = rustix::process::geteuid();
-        if uid.is_root() || uid.as_raw() == owner.uid() {
-            rustix::fs::fchown(
-                &file,
-                Some(rustix::fs::Uid::from_raw(owner.uid())),
-                Some(rustix::fs::Gid::from_raw(owner.gid())),
-            )?;
-        }
-        file.set_permissions(Permissions::from_mode(mode))?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        parent.rename(&temp, &parent, name)
-    })();
-    if result.is_err() {
-        let _ = parent.remove_file(&temp);
-    }
-    result.map(|()| existing.is_none())
+    crabber_tools_core::atomic::write_sibling(
+        &parent,
+        name,
+        bytes,
+        &owner,
+        mode,
+        crabber_tools_core::atomic::Install::Replace,
+    )?;
+    Ok(existing.is_none())
 }

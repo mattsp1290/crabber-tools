@@ -379,6 +379,69 @@ groups outside character classes. These bounds precede recursive glob parsing.
 Compilation uses a fallible GlobSet builder on the blocking worker after capacity
 admission; overly complex patterns return `validation` instead of panicking.
 
+## apply_patch
+
+Catalog id: `standard.apply-patch` (catalog integration follows the four WP7 crates).
+Retry safe: false. Advisory permission: `workspace.fs.write`.
+
+```json
+{
+  "properties": {
+    "patch_text": {
+      "minLength": 1,
+      "description": "Patch text using the *** Begin Patch / *** End Patch grammar. Cap is 1 MiB.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "patch_text"
+  ],
+  "type": "object"
+}
+```
+
+Input is capped at 1 MiB before parsing. The iterative parser accepts the pinned
+Go grammar: add, update with line-anchored unique hunks, optional move, and delete.
+CRLF/lone CR patch input normalizes to LF. Updates preserve CRLF when present in
+the original file; matching context includes terminal newlines as upstream does.
+An ambiguous or missing hunk returns `conflict`, including overlapping matches.
+
+Preflight validates every source, destination, duplicate/ancestor target, and
+hunk before any write or directory creation. Capability-resolved aliases are
+also checked for overlapping targets. Sources must be regular files; final
+symlinks are rejected. Binary deletion is supported; updates reject NUL or
+invalid UTF-8. Deliberate resource addition: each source/result text file is
+capped at 16 MiB and aggregate planned content at 64 MiB (`too_large`).
+
+Preflight and commit share the per-root writer lock and mount capacity. Both
+guards remain owned by blocking work if the runtime drops its future. Cancellation
+is checked between files, reads and hunks; an atomic write already started may
+finish before the worker stops. Writes use synced temporary siblings and atomic
+installation; add/move destinations use no-clobber hard-link installation.
+Existing source mode and conditional ownership are preserved as for fileops.
+New files use mode 0644. Missing destination parents are created during commit.
+
+Success keys: `outcome`, `files`, `partial: false`. Each file reports `operation`,
+`path`, optional `new_path`, `status`, `additions`, `deletions`. Preflight failures
+have `partial: false` and only `preflighted` summaries. A commit failure has
+`partial: true`, with completed operations `applied`, the failing operation
+`failed`, and remaining operations `preflighted`. This conservative flag may be
+true even when the failing operation installed no content, or installed a move
+destination but could not remove its source. Patches are atomic per file, not
+transactional across files. The writer lock coordinates cooperating tools;
+external filesystem mutations can still invalidate a preflight snapshot.
+
+Categories: `validation`, `path_escape`, `not_found`, `not_directory`,
+`is_directory`, `too_large`, `unsupported`, `conflict`, `binary`, `io`,
+`unknown`, `workspace_mismatch`, `unavailable`. Error messages omit host paths
+and source contents. Failed results include `files`, `partial`, and `error`.
+
+Patch preflight uses linear, overlapping, line-anchored literal matching with
+cancellation checkpoints at most 4096 scanned bytes apart. Target overlap checks
+use component-aware ancestor lookup and ordered descendant lookup rather than
+scanning all earlier targets for every operation.
+
 ## tracker_write
 
 Catalog id: `standard.tracker-write` (catalog integration follows the four WP7 crates).
