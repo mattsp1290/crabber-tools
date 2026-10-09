@@ -29,9 +29,10 @@ fn file(path: &Path) -> String {
 #[tokio::test]
 async fn confined_file_urls_utf8_caps_and_nonregular_paths() {
     let root = tempfile::tempdir().unwrap();
+    let canonical_root = root.path().canonicalize().unwrap();
     let outside = tempfile::tempdir().unwrap();
-    let o = options(root.path());
-    let name = root.path().join("space # λ.txt");
+    let o = options(canonical_root.as_path());
+    let name = canonical_root.as_path().join("space # λ.txt");
     std::fs::write(&name, "hello λ\n").unwrap();
     assert_eq!(
         support::execute(
@@ -42,30 +43,46 @@ async fn confined_file_urls_utf8_caps_and_nonregular_paths() {
         .await,
         json!({"outcome":"succeeded","content":"hello λ\n"})
     );
-    let link = root.path().join("link");
+    let link = canonical_root.as_path().join("link");
     std::os::unix::fs::symlink("space # λ.txt", &link).unwrap();
     assert_eq!(
         call(&o, json!({"url":file(&link)})).await["content"],
         "hello λ\n"
     );
-    std::fs::write(root.path().join("empty"), "").unwrap();
+    std::fs::write(canonical_root.as_path().join("empty"), "").unwrap();
     assert_eq!(
-        call(&o, json!({"url":file(&root.path().join("empty"))})).await["content"],
+        call(
+            &o,
+            json!({"url":file(&canonical_root.as_path().join("empty"))})
+        )
+        .await["content"],
         ""
     );
-    std::fs::write(root.path().join("cap"), vec![b'x'; MAX_BODY_BYTES]).unwrap();
+    std::fs::write(
+        canonical_root.as_path().join("cap"),
+        vec![b'x'; MAX_BODY_BYTES],
+    )
+    .unwrap();
     assert_eq!(
-        call(&o, json!({"url":file(&root.path().join("cap"))})).await["content"]
+        call(
+            &o,
+            json!({"url":file(&canonical_root.as_path().join("cap"))})
+        )
+        .await["content"]
             .as_str()
             .unwrap()
             .len(),
         MAX_BODY_BYTES
     );
-    std::fs::write(root.path().join("large"), vec![b'x'; MAX_BODY_BYTES + 1]).unwrap();
-    std::fs::write(root.path().join("binary"), [0xff]).unwrap();
+    std::fs::write(
+        canonical_root.as_path().join("large"),
+        vec![b'x'; MAX_BODY_BYTES + 1],
+    )
+    .unwrap();
+    std::fs::write(canonical_root.as_path().join("binary"), [0xff]).unwrap();
     std::fs::write(outside.path().join("private"), "outside secret").unwrap();
-    std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
-    let fifo = root.path().join("fifo");
+    std::os::unix::fs::symlink(outside.path(), canonical_root.as_path().join("escape")).unwrap();
+    let fifo = canonical_root.as_path().join("fifo");
     assert!(
         std::process::Command::new("mkfifo")
             .arg(&fifo)
@@ -74,13 +91,16 @@ async fn confined_file_urls_utf8_caps_and_nonregular_paths() {
             .success()
     );
     for (path, category) in [
-        (root.path().join("large"), "too_large"),
-        (root.path().join("binary"), "binary"),
-        (root.path().join("missing"), "not_found"),
-        (root.path().to_path_buf(), "io"),
+        (canonical_root.as_path().join("large"), "too_large"),
+        (canonical_root.as_path().join("binary"), "binary"),
+        (canonical_root.as_path().join("missing"), "not_found"),
+        (canonical_root.as_path().to_path_buf(), "io"),
         (fifo, "io"),
         (outside.path().join("private"), "path_escape"),
-        (root.path().join("escape/private"), "path_escape"),
+        (
+            canonical_root.as_path().join("escape/private"),
+            "path_escape",
+        ),
     ] {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(2),
@@ -95,8 +115,9 @@ async fn confined_file_urls_utf8_caps_and_nonregular_paths() {
 #[tokio::test]
 async fn validation_cancellation_and_workspace_routing_fail_closed() {
     let root = tempfile::tempdir().unwrap();
+    let canonical_root = root.path().canonicalize().unwrap();
     let other = tempfile::tempdir().unwrap();
-    let o = options(root.path());
+    let o = options(canonical_root.as_path());
     for value in [
         json!({}),
         json!({"url":" "}),
@@ -106,7 +127,7 @@ async fn validation_cancellation_and_workspace_routing_fail_closed() {
         json!({"url":"https://example.com/","extra":1}),
         json!({"url":"https://127.0.0.1/"}),
         json!({"url":"file://remote/path"}),
-        json!({"url":format!("{}%00b",file(&root.path().join("a")))}),
+        json!({"url":format!("{}%00b",file(&canonical_root.as_path().join("a")))}),
         json!({"url":"x".repeat(crabber_tools_urlfetch::MAX_URL_BYTES+1)}),
     ] {
         assert_eq!(call(&o, value).await["error"]["category"], "validation");
@@ -115,7 +136,7 @@ async fn validation_cancellation_and_workspace_routing_fail_closed() {
         support::execute(
             other.path(),
             definition(o.clone()).unwrap(),
-            json!({"url":file(&root.path().join("missing"))})
+            json!({"url":file(&canonical_root.as_path().join("missing"))})
         )
         .await["error"]["category"],
         "workspace_mismatch"
@@ -128,7 +149,7 @@ async fn validation_cancellation_and_workspace_routing_fail_closed() {
             .executor
             .execute_with_context(
                 support::context(&o.root, cancel),
-                json!({"url":file(&root.path().join("missing"))})
+                json!({"url":file(&canonical_root.as_path().join("missing"))})
             )
             .await
             .is_err()

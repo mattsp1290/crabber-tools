@@ -369,7 +369,7 @@ scheme, host allowlist and fresh resolved addresses at every hop, including a
 redirect to the same hostname. Downgrades to HTTP or file URLs are rejected.
 
 File URLs use the admitted workspace directory capability and the same body cap
-and UTF-8 requirement. Absolute file paths must be inside the root; symlink
+and UTF-8 requirement. Absolute file paths must begin with the canonical `WorkspaceRoot::path()`; symlink
 escapes produce `path_escape`. Localhost is normalized as local by URL parsing;
 other authorities and queries are rejected. Reads require regular files and use
 nonblocking opens so FIFOs cannot stall admission. Reads run off the async worker
@@ -383,3 +383,9 @@ Cancellation is an executor error. Differences from eino-tools are confined file
 URLs, bounded work/body/redirects, explicit network policy and UTF-8 validation.
 Metadata preserves the independent upstream description and schema; this section
 defines the Rust runtime's stricter bounds and redirect policy.
+
+The conservative address exclusions include IPv6 documentation `3fff::/20` and
+deprecated IPv4 relay `192.88.99.0/24`, including mapped IPv4 forms. Prefixes were
+checked against the [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+and [IANA IPv4 special-purpose registry](https://www.iana.org/assignments/iana-ipv4-special-registry/).
+These explicit static exclusions do not guarantee routability in every network.

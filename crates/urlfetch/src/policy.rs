@@ -120,7 +120,8 @@ fn is_public(ip: IpAddr) -> bool {
                 || (a == 172 && (16..=31).contains(&b))
                 || (a == 192 && (b == 168 || (b == 0 && (c == 0 || c == 2))))
                 || (a == 198 && (b == 18 || b == 19 || (b == 51 && c == 100)))
-                || (a == 203 && b == 0 && c == 113))
+                || (a == 203 && b == 0 && c == 113)
+                || (a == 192 && b == 88 && c == 99))
         }
         IpAddr::V6(ip) => {
             if let Some(mapped) = ip.to_ipv4_mapped() {
@@ -131,6 +132,7 @@ fn is_public(ip: IpAddr) -> bool {
             // and transition prefixes that can embed private IPv4 destinations.
             s[0] & 0xe000 == 0x2000
                 && s[0] != 0x2002
+                && !(s[0] == 0x3fff && s[1] & 0xf000 == 0)
                 && !(s[0] == 0x2001 && (s[1] < 0x200 || s[1] == 0xdb8))
         }
     }

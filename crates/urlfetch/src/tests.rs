@@ -141,6 +141,10 @@ async fn private_literals_mixed_dns_and_redirects_fail_before_connection() {
         "[::ffff:127.0.0.1]",
         "[64:ff9b::7f00:1]",
         "[2002:7f00:1::]",
+        "[3fff::1]",
+        "[3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff]",
+        "192.88.99.2",
+        "[::ffff:192.88.99.2]",
     ] {
         let mock = Mock::default();
         assert_eq!(
@@ -382,5 +386,149 @@ fn policy_construction_is_normalized_and_checked() {
     let policy = UrlFetchPolicy::default();
     for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
         policy.check_ip(ip.parse().unwrap()).unwrap();
+    }
+}
+
+// Append inside src/tests.rs after owner approval; private FetchTool seam is reused.
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+struct PendingBody {
+    started: Arc<tokio::sync::Notify>,
+    dropped: Arc<AtomicBool>,
+}
+impl Drop for PendingBody {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+#[async_trait]
+impl Body for PendingBody {
+    fn status(&self) -> u16 {
+        200
+    }
+    fn location(&self) -> Result<Option<String>, ToolError> {
+        Ok(None)
+    }
+    fn length(&self) -> Option<u64> {
+        None
+    }
+    async fn chunk(&mut self) -> Result<Option<Vec<u8>>, ToolError> {
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+struct BodyTransport {
+    started: Arc<tokio::sync::Notify>,
+    dropped: Arc<AtomicBool>,
+    hops: AtomicUsize,
+    delay_redirect: bool,
+}
+#[async_trait]
+impl Transport for BodyTransport {
+    async fn resolve(&self, _: &str, port: u16) -> Result<Vec<SocketAddr>, ToolError> {
+        Ok(vec![SocketAddr::new("8.8.8.8".parse().unwrap(), port)])
+    }
+    async fn get(&self, _: &Url, _: &str, _: &[SocketAddr]) -> Result<Box<dyn Body>, ToolError> {
+        if self.delay_redirect && self.hops.fetch_add(1, Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_secs(20)).await;
+            return Ok(Box::new(Reply::redirect("/final")));
+        }
+        Ok(Box::new(PendingBody {
+            started: self.started.clone(),
+            dropped: self.dropped.clone(),
+        }))
+    }
+}
+fn body_transport(delay_redirect: bool) -> Arc<BodyTransport> {
+    Arc::new(BodyTransport {
+        started: Arc::new(tokio::sync::Notify::new()),
+        dropped: Arc::new(AtomicBool::new(false)),
+        hops: AtomicUsize::new(0),
+        delay_redirect,
+    })
+}
+#[tokio::test(start_paused = true)]
+async fn response_body_and_delayed_redirect_share_total_deadline() {
+    for delay_redirect in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut tool = tool(root.path());
+        let transport = body_transport(delay_redirect);
+        tool.transport = transport.clone();
+        let start = tokio::time::Instant::now();
+        let result = tool
+            .execute_with_context(
+                support::context(&tool.options.root, CancellationToken::new()),
+                json!({"url":"https://example.com/"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["error"]["category"], "timeout");
+        assert_eq!(start.elapsed(), TIMEOUT);
+        assert!(transport.dropped.load(Ordering::SeqCst));
+        let _permit = acquire_read(
+            &tool.options.capacity,
+            &tool.options.limits,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    }
+}
+#[tokio::test]
+async fn cancellation_drops_streaming_body_and_recovers_capacity() {
+    let root = tempfile::tempdir().unwrap();
+    let mut tool = tool(root.path());
+    let transport = body_transport(false);
+    tool.transport = transport.clone();
+    let cancel = CancellationToken::new();
+    let work = tool.execute_with_context(
+        support::context(&tool.options.root, cancel.clone()),
+        json!({"url":"https://example.com/"}),
+    );
+    tokio::pin!(work);
+    tokio::select! { biased;
+        result = &mut work => panic!("unexpected result {result:?}"),
+        _ = transport.started.notified() => {}
+    }
+    cancel.cancel();
+    assert!(work.await.is_err());
+    assert!(transport.dropped.load(Ordering::SeqCst));
+    let _permit = acquire_read(
+        &tool.options.capacity,
+        &tool.options.limits,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn special_purpose_dns_and_prefix_boundaries() {
+    for ip in [
+        "3fff::1",
+        "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "192.88.99.2",
+        "::ffff:192.88.99.2",
+    ] {
+        let mock = Mock {
+            resolutions: Mutex::new(VecDeque::from([vec![SocketAddr::new(
+                ip.parse().unwrap(),
+                443,
+            )]])),
+            ..Mock::default()
+        };
+        assert_eq!(
+            fetch(&mock, "https://example.com/")
+                .await
+                .unwrap_err()
+                .category,
+            "validation",
+            "{ip}"
+        );
+        assert!(mock.connections.lock().unwrap().is_empty());
+    }
+    for ip in ["3fff:1000::", "192.88.98.255", "192.88.100.0"] {
+        UrlFetchPolicy::default()
+            .check_ip(ip.parse().unwrap())
+            .unwrap();
     }
 }
