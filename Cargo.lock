@@ -332,6 +332,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabber-tools-trackerwrite"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "crabber",
+ "crabber-tools-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
