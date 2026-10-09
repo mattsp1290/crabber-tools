@@ -322,6 +322,63 @@ Limits: 60s default/600s maximum; per-stream cap supplied by host (1 byte..16 Mi
 
 Failure categories: validation, path_escape, not_found, is_directory, not_directory, io, unknown, workspace_mismatch, unavailable, timeout, exec_failed.
 
+## glob
+
+Catalog id: `standard.glob` (catalog integration follows the second-deliverable crates).
+Retry safe: true. Advisory permission: `workspace.fs.read`. Include hidden entries, skip
+`.git`, `.hg`, `.svn`, `.jj` directories, and never descend through directory
+symlinks encountered during walking. An explicitly supplied search root is
+resolved through the workspace capability. Patterns match relative to that
+search root; returned paths are relative to the workspace. Glob separators are
+literal: `*` and `?` do not cross `/`, while `**` can.
+
+```json
+{
+  "properties": {
+    "pattern": {
+      "minLength": 1,
+      "description": "Doublestar glob pattern to match against paths under the search root, e.g. \"*.go\" or \"**/*_test.go\".",
+      "type": "string"
+    },
+    "path": {
+      "description": "Workspace-relative directory to search. Omit or use \".\" for the workspace root.",
+      "type": "string"
+    },
+    "limit": {
+      "maximum": 5000,
+      "minimum": 1,
+      "description": "Maximum number of paths to return. Default 1000; hard cap 5000.",
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "pattern"
+  ],
+  "type": "object"
+}
+```
+
+Success keys: `outcome`, `paths` (`path`, `is_dir`), `count`, `truncated`.
+Failures retain empty `paths`, zero `count`, false `truncated`, and `error`.
+Categories: `validation`, `path_escape`, `not_found`, `not_directory`, `io`,
+`unknown`, `workspace_mismatch`, `unavailable`. Default limit 1000, maximum
+5000; zero is rejected. Results sort by rendered workspace path and
+`truncated` means another matching entry was omitted. Retained results and
+directory batches are bounded independently of tree width. Traversal keeps no
+recursive call stack or open directory stack; exhausted/evicted batches rescan
+siblings, trading additional directory reads for bounded resources. Cancellation
+is checked during every scan and follows the common runtime interruption rule.
+
+Non-UTF-8 names use lossy display paths; distinct raw names remain separate
+results even when their displayed paths coincide. Raw bytes break display-sort
+ties, and every matched entry counts toward truncation.
+
+Glob patterns are limited to 4096 bytes and at most 16 nested unescaped brace
+groups outside character classes. These bounds precede recursive glob parsing.
+Compilation uses a fallible GlobSet builder on the blocking worker after capacity
+admission; overly complex patterns return `validation` instead of panicking.
+
 ## apply_patch
 
 Catalog id: `standard.apply-patch` (catalog integration follows the four WP7 crates).
@@ -384,3 +441,96 @@ Patch preflight uses linear, overlapping, line-anchored literal matching with
 cancellation checkpoints at most 4096 scanned bytes apart. Target overlap checks
 use component-aware ancestor lookup and ordered descendant lookup rather than
 scanning all earlier targets for every operation.
+
+## tracker_write
+
+Catalog id: `standard.tracker-write` (catalog integration follows the four WP7 crates).
+Retry safe: false. Advisory permission: `tracker.write`. Mutates the hub rather
+than the workspace, so it takes mount capacity without the workspace writer lock.
+Owner-approved G3 backend: the `bn` CLI.
+
+```json
+{
+  "properties": {
+    "op": {
+      "enum": [
+        "comment",
+        "transition",
+        "close",
+        "link_pr"
+      ],
+      "description": "Discriminator. v1 implements 'close' and optionally 'transition' or 'comment' when the configured writer supports those capabilities; unsupported ops return tool_failed{error.category=unsupported_op}.",
+      "type": "string"
+    },
+    "id": {
+      "minLength": 1,
+      "description": "Tracker issue identifier.",
+      "type": "string"
+    },
+    "body": {
+      "minLength": 1,
+      "description": "Comment body. Required for op=comment.",
+      "type": "string"
+    },
+    "toState": {
+      "minLength": 1,
+      "description": "Target issue state for op=transition. If the configured writer does not support transitions, op=transition returns unsupported_op regardless of this value.",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Optional close reason.",
+      "type": "string"
+    },
+    "prURL": {
+      "minLength": 1,
+      "description": "Pull-request URL. Required for op=link_pr (post-v1).",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "op",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+Supported operations: `close`, `transition`, `comment`; `link_pr` returns
+`unsupported_op`. IDs must match `[a-z0-9-]+-[a-z0-9]{4}` and fit 256 bytes.
+Comments must be nonblank; transitions must name a host-configured workflow
+state. Comment/reason input is capped at 64 KiB. NUL and unknown fields are
+rejected. No shell parses model values.
+
+Exact argv mapping after host-owned `--project <project>`:
+
+- close: `close -r <reason or "closed by tracker_write"> -- <id>`
+- transition: `update --status <toState> -- <id>`
+- comment: `note -- <id> <body>`
+
+The local bn v0.3.0 parser was verified to accept each positional separator,
+including a leading-dash comment body, against a nonexistent scratch hub.
+Positional model values follow `--`. Reason and state are option values, which
+must precede the separator in bn's grammar: close reasons beginning with `-`
+are rejected, and states come from a validated host allowlist with no leading
+`-`. Thus no model value becomes an option. This uses the plan's validation
+fallback where an option value cannot be placed after `--`.
+
+Host `TrackerPolicy` supplies an absolute executable, explicit project, absolute
+hub directory, audit actor, configured statuses, and additional replacement
+environment entries. The tool adds `BEANS_HUB` and `BN_ACTOR`; those keys and
+duplicate environment names are rejected in additional entries. Nothing is
+implicitly inherited. Supply PATH/HOME/git configuration explicitly if the
+host wants bn to synchronize with a remote. Child cwd is the admitted workspace.
+
+The command deadline is 60s with the shared bounded kill/reap grace. Both streams
+are drained concurrently, retaining at most 4 KiB each. Capped stderr selects a
+fixed sanitized diagnostic; raw output, host paths and credentials are never
+returned. Cancellation drops the child process-group guard and signals its group.
+
+Exit mapping: 0 succeeded; 1 validation; 2 not_found; 3 api_request; 4
+rate_limited; other/signal unknown. Spawn errors are api_request; capture errors
+io; command deadlines timeout. Workspace mismatch and unavailable capacity use
+the common categories. Result keys: `outcome`, `op`, `id`, and on failure
+`error {category,message,op}`. Invalid oversized op/id fields are omitted as
+empty strings to keep the error envelope bounded.
