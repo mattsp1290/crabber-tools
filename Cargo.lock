@@ -391,15 +391,20 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "crabber",
+ "crabber-tools-applypatch",
  "crabber-tools-core",
  "crabber-tools-fileops",
+ "crabber-tools-glob",
  "crabber-tools-search",
  "crabber-tools-shell",
+ "crabber-tools-trackerwrite",
+ "crabber-tools-urlfetch",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
+ "url",
 ]
 
 [[package]]
