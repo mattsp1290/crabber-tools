@@ -442,6 +442,74 @@ cancellation checkpoints at most 4096 scanned bytes apart. Target overlap checks
 use component-aware ancestor lookup and ordered descendant lookup rather than
 scanning all earlier targets for every operation.
 
+## url_fetch
+
+Tool id `standard.url-fetch`; retry safe; requires `network.http.fetch` and
+`workspace.fs.read` because a call can select HTTPS or a file URL.
+
+```json
+{
+  "properties": {
+    "url": {
+      "minLength": 1,
+      "description": "URL to fetch. Supported schemes: file:// (local filesystem) and https://. Returns the raw text content of the resource.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "url"
+  ],
+  "type": "object"
+}
+```
+
+HTTPS uses reqwest with rustls and one 30-second total deadline covering capacity
+admission, DNS, all redirects and body reads. It returns raw UTF-8 text, including
+empty content. HTTP directs the caller to HTTPS. URL user information is rejected.
+URL input and each redirect URL are capped at 8192 bytes. Bodies are capped at
+1 MiB (inclusive); invalid UTF-8 produces `binary`. Response 404 maps to
+`not_found`; other unsuccessful status codes and transport errors map to
+`network`. Errors contain fixed messages without URLs or transport diagnostics.
+
+The host supplies `UrlFetchPolicy`. Its default denies private and non-public
+addresses with an empty host allowlist. `HostPattern::exact` normalizes a DNS name
+or IP literal; `HostPattern::subdomains` permits proper subdomains of a normalized
+DNS suffix, excluding the suffix itself. Non-normalized direct enum values fail
+construction. An allowlist does not override address restrictions; opting out of
+private-range denial requires explicit host policy. Private, loopback, unspecified,
+link-local, shared, multicast, reserved and documentation IPv4 ranges are denied.
+IPv6 is restricted to ordinary global unicast, excluding mapped private IPv4,
+special-purpose, documentation and transition prefixes. Addresses are checked as
+a complete set, with at most 64 resolved addresses; any denied address fails the
+hop. Each connection uses a fresh client pinned to that checked set, preserving
+URL host and TLS SNI. Proxy environment variables, automatic redirects and
+retries are disabled. Redirects are followed manually (at most five), validating
+scheme, host allowlist and fresh resolved addresses at every hop, including a
+redirect to the same hostname. Downgrades to HTTP or file URLs are rejected.
+
+File URLs use the admitted workspace directory capability and the same body cap
+and UTF-8 requirement. Absolute file paths must begin with the canonical `WorkspaceRoot::path()`; symlink
+escapes produce `path_escape`. Localhost is normalized as local by URL parsing;
+other authorities and queries are rejected. Reads require regular files and use
+nonblocking opens so FIFOs cannot stall admission. Reads run off the async worker
+and keep shared capacity until the blocking task exits after cancellation or
+timeout. File operations do not take the workspace writer lock. The host owns
+admission and redaction; this crate does not parse or sanitize HTML.
+
+Errors include `validation`, `path_escape`, `not_found`, `io`, `network`,
+`too_large`, `binary`, `timeout`, `workspace_mismatch`, `unavailable` and `unknown`.
+Cancellation is an executor error. Differences from eino-tools are confined file
+URLs, bounded work/body/redirects, explicit network policy and UTF-8 validation.
+Metadata preserves the independent upstream description and schema; this section
+defines the Rust runtime's stricter bounds and redirect policy.
+
+The conservative address exclusions include IPv6 documentation `3fff::/20` and
+deprecated IPv4 relay `192.88.99.0/24`, including mapped IPv4 forms. Prefixes were
+checked against the [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+and [IANA IPv4 special-purpose registry](https://www.iana.org/assignments/iana-ipv4-special-registry/).
+These explicit static exclusions do not guarantee routability in every network.
+
 ## tracker_write
 
 Catalog id: `standard.tracker-write` (catalog integration follows the four WP7 crates).

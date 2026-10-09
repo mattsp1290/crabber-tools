@@ -21,6 +21,12 @@ extracts its twelve structured patch strings and their setup/expected categories
 Rust runtime tests run every extracted case. Additional Rust cases cover malformed
 grammar, overlapping ambiguity, content bounds, cancellation, and commit failures.
 
+`url_fetch.json` was separately extracted from an archive of the same immutable
+revision with `urlfetch.ToolInfo()` and `info.ToJSONSchema()` in a temporary Go
+program. It is not generated from Rust metadata. Its unchanged upstream prose
+mentions Go redirect defaults; the Rust runtime uses the stricter manual policy
+documented in `docs/tool-contract.md`.
+
 `tracker_write.json` was extracted on 2026-10-09 from the same immutable Go
 revision using `trackerwrite.ToolInfo()` and `info.ToJSONSchema()` in the
 throwaway extractor. Its parity test compares independently implemented Rust
