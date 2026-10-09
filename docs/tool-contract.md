@@ -326,7 +326,7 @@ Failure categories: validation, path_escape, not_found, is_directory, not_direct
 
 ## glob
 
-Catalog id: `standard.glob` (catalog integration follows the second-deliverable crates).
+Catalog id: `standard.glob`.
 Retry safe: true. Advisory permission: `workspace.fs.read`. Include hidden entries, skip
 `.git`, `.hg`, `.svn`, `.jj` directories, and never descend through directory
 symlinks encountered during walking. An explicitly supplied search root is
@@ -383,7 +383,7 @@ admission; overly complex patterns return `validation` instead of panicking.
 
 ## apply_patch
 
-Catalog id: `standard.apply-patch` (catalog integration follows the four WP7 crates).
+Catalog id: `standard.apply-patch`.
 Retry safe: false. Advisory permission: `workspace.fs.write`.
 
 ```json
@@ -514,7 +514,7 @@ These explicit static exclusions do not guarantee routability in every network.
 
 ## tracker_write
 
-Catalog id: `standard.tracker-write` (catalog integration follows the four WP7 crates).
+Catalog id: `standard.tracker-write`.
 Retry safe: false. Advisory permission: `tracker.write`. Mutates the hub rather
 than the workspace, so it takes mount capacity without the workspace writer lock.
 Owner-approved G3 backend: the `bn` CLI.
