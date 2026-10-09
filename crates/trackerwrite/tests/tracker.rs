@@ -121,7 +121,7 @@ async fn argv_environment_and_workspace_lock_independence() {
         std::fs::read_to_string(hub.path().join("cwd"))
             .unwrap()
             .trim(),
-        root.path().to_str().unwrap()
+        o.root.path().to_str().unwrap()
     );
     assert!(!root.path().join("never").exists());
 }
