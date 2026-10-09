@@ -321,3 +321,51 @@ Success keys: outcome, exit_code, stdout, stderr, duration_ms; optional stdout_t
 Limits: 60s default/600s maximum; per-stream cap supplied by host (1 byte..16 MiB); excess drained, UTF-8 incomplete suffix removed and invalid sequences replaced. Signals map to 128+signal.
 
 Failure categories: validation, path_escape, not_found, is_directory, not_directory, io, unknown, workspace_mismatch, unavailable, timeout, exec_failed.
+
+## glob
+
+Catalog id: `standard.glob` (catalog integration follows the second-deliverable crates).
+Retry safe: true. Advisory permission: `workspace.fs.read`. Include hidden entries, skip
+`.git`, `.hg`, `.svn`, `.jj` directories, and never descend through directory
+symlinks encountered during walking. An explicitly supplied search root is
+resolved through the workspace capability. Patterns match relative to that
+search root; returned paths are relative to the workspace. Glob separators are
+literal: `*` and `?` do not cross `/`, while `**` can.
+
+```json
+{
+  "properties": {
+    "pattern": {
+      "minLength": 1,
+      "description": "Doublestar glob pattern to match against paths under the search root, e.g. \"*.go\" or \"**/*_test.go\".",
+      "type": "string"
+    },
+    "path": {
+      "description": "Workspace-relative directory to search. Omit or use \".\" for the workspace root.",
+      "type": "string"
+    },
+    "limit": {
+      "maximum": 5000,
+      "minimum": 1,
+      "description": "Maximum number of paths to return. Default 1000; hard cap 5000.",
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "pattern"
+  ],
+  "type": "object"
+}
+```
+
+Success keys: `outcome`, `paths` (`path`, `is_dir`), `count`, `truncated`.
+Failures retain empty `paths`, zero `count`, false `truncated`, and `error`.
+Categories: `validation`, `path_escape`, `not_found`, `not_directory`, `io`,
+`unknown`, `workspace_mismatch`, `unavailable`. Default limit 1000, maximum
+5000; zero is rejected. Results sort by rendered workspace path and
+`truncated` means another matching entry was omitted. Retained results and
+directory batches are bounded independently of tree width. Traversal keeps no
+recursive call stack or open directory stack; exhausted/evicted batches rescan
+siblings, trading additional directory reads for bounded resources. Cancellation
+is checked during every scan and follows the common runtime interruption rule.

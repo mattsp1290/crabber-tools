@@ -8,3 +8,7 @@ Extracted in a temporary archive of that revision with a throwaway Go program:
 `search.ToolInfo`, and `shell.ToolInfo`, then `info.ToJSONSchema()`, serializing
 `name`, `info.Desc` as `description`, and the schema as `parameters`.
 The extractor was not committed. These are upstream fixtures, not Rust output.
+
+The second-deliverable `glob.json` was independently extracted at the same
+revision using a throwaway `cmd/crabber-fixtures` Go program calling
+`glob.ToolInfo()` and `info.ToJSONSchema()` (2026-10-09).
