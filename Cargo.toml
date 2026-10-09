@@ -22,7 +22,14 @@ libc = "0.2"
 getrandom = "0.3"
 tempfile = "3"
 base64 = "0.22"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+url = "2"
+globset = "0.4"
 
+crabber-tools-glob = { path = "crates/glob" }
+crabber-tools-applypatch = { path = "crates/applypatch" }
+crabber-tools-trackerwrite = { path = "crates/trackerwrite" }
+crabber-tools-urlfetch = { path = "crates/urlfetch" }
 crabber-tools-core = { path = "crates/core" }
 crabber-tools-fileops = { path = "crates/fileops" }
 crabber-tools-search = { path = "crates/search" }
