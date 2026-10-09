@@ -321,3 +321,96 @@ Success keys: outcome, exit_code, stdout, stderr, duration_ms; optional stdout_t
 Limits: 60s default/600s maximum; per-stream cap supplied by host (1 byte..16 MiB); excess drained, UTF-8 incomplete suffix removed and invalid sequences replaced. Signals map to 128+signal.
 
 Failure categories: validation, path_escape, not_found, is_directory, not_directory, io, unknown, workspace_mismatch, unavailable, timeout, exec_failed.
+
+## tracker_write
+
+Catalog id: `standard.tracker-write` (catalog integration follows the four WP7 crates).
+Retry safe: false. Advisory permission: `tracker.write`. Mutates the hub rather
+than the workspace, so it takes mount capacity without the workspace writer lock.
+Owner-approved G3 backend: the `bn` CLI.
+
+```json
+{
+  "properties": {
+    "op": {
+      "enum": [
+        "comment",
+        "transition",
+        "close",
+        "link_pr"
+      ],
+      "description": "Discriminator. v1 implements 'close' and optionally 'transition' or 'comment' when the configured writer supports those capabilities; unsupported ops return tool_failed{error.category=unsupported_op}.",
+      "type": "string"
+    },
+    "id": {
+      "minLength": 1,
+      "description": "Tracker issue identifier.",
+      "type": "string"
+    },
+    "body": {
+      "minLength": 1,
+      "description": "Comment body. Required for op=comment.",
+      "type": "string"
+    },
+    "toState": {
+      "minLength": 1,
+      "description": "Target issue state for op=transition. If the configured writer does not support transitions, op=transition returns unsupported_op regardless of this value.",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Optional close reason.",
+      "type": "string"
+    },
+    "prURL": {
+      "minLength": 1,
+      "description": "Pull-request URL. Required for op=link_pr (post-v1).",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "op",
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+Supported operations: `close`, `transition`, `comment`; `link_pr` returns
+`unsupported_op`. IDs must match `[a-z0-9-]+-[a-z0-9]{4}` and fit 256 bytes.
+Comments must be nonblank; transitions must name a host-configured workflow
+state. Comment/reason input is capped at 64 KiB. NUL and unknown fields are
+rejected. No shell parses model values.
+
+Exact argv mapping after host-owned `--project <project>`:
+
+- close: `close -r <reason or "closed by tracker_write"> -- <id>`
+- transition: `update --status <toState> -- <id>`
+- comment: `note -- <id> <body>`
+
+The local bn v0.3.0 parser was verified to accept each positional separator,
+including a leading-dash comment body, against a nonexistent scratch hub.
+Positional model values follow `--`. Reason and state are option values, which
+must precede the separator in bn's grammar: close reasons beginning with `-`
+are rejected, and states come from a validated host allowlist with no leading
+`-`. Thus no model value becomes an option. This uses the plan's validation
+fallback where an option value cannot be placed after `--`.
+
+Host `TrackerPolicy` supplies an absolute executable, explicit project, absolute
+hub directory, audit actor, configured statuses, and additional replacement
+environment entries. The tool adds `BEANS_HUB` and `BN_ACTOR`; those keys and
+duplicate environment names are rejected in additional entries. Nothing is
+implicitly inherited. Supply PATH/HOME/git configuration explicitly if the
+host wants bn to synchronize with a remote. Child cwd is the admitted workspace.
+
+The command deadline is 60s with the shared bounded kill/reap grace. Both streams
+are drained concurrently, retaining at most 4 KiB each. Capped stderr selects a
+fixed sanitized diagnostic; raw output, host paths and credentials are never
+returned. Cancellation drops the child process-group guard and signals its group.
+
+Exit mapping: 0 succeeded; 1 validation; 2 not_found; 3 api_request; 4
+rate_limited; other/signal unknown. Spawn errors are api_request; capture errors
+io; command deadlines timeout. Workspace mismatch and unavailable capacity use
+the common categories. Result keys: `outcome`, `op`, `id`, and on failure
+`error {category,message,op}`. Invalid oversized op/id fields are omitted as
+empty strings to keep the error envelope bounded.
