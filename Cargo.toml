@@ -24,6 +24,7 @@ tempfile = "3"
 base64 = "0.22"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 url = "2"
+globset = "0.4"
 
 crabber-tools-urlfetch = { path = "crates/urlfetch" }
 crabber-tools-core = { path = "crates/core" }
