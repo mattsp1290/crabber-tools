@@ -235,3 +235,99 @@ async fn wide_batches_and_nested_resume_preserve_earliest_matches() {
     );
     assert_eq!(v["truncated"], true);
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn lossy_name_collisions_preserve_identity_and_truncation() {
+    use std::os::unix::ffi::OsStringExt;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path()
+            .join(std::ffi::OsString::from_vec(vec![b'x', 0x80])),
+        "",
+    )
+    .unwrap();
+    std::fs::create_dir(
+        temp.path()
+            .join(std::ffi::OsString::from_vec(vec![b'x', 0x81])),
+    )
+    .unwrap();
+    let o = options(temp.path());
+    let v = call(&o, json!({"pattern":"*","limit":2})).await;
+    assert_eq!(v["count"], 2);
+    assert_eq!(v["truncated"], false);
+    assert_eq!(
+        v["paths"],
+        json!([{"path":"x�","is_dir":false},{"path":"x�","is_dir":true}])
+    );
+    let v = call(&o, json!({"pattern":"*","limit":1})).await;
+    assert_eq!(v["count"], 1);
+    assert_eq!(v["truncated"], true);
+}
+#[tokio::test]
+async fn evicted_ancestors_resume_unfinished_siblings() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut prefix = std::path::PathBuf::new();
+    let mut expected = vec![];
+    for _ in 0..12 {
+        let path = prefix.join("z.rs");
+        std::fs::write(temp.path().join(&path), "").unwrap();
+        expected.push(path.to_string_lossy().into_owned());
+        prefix.push("a");
+        std::fs::create_dir(temp.path().join(&prefix)).unwrap();
+    }
+    expected.sort();
+    let o = options(temp.path());
+    let v = call(&o, json!({"pattern":"**/*.rs"})).await;
+    let actual: Vec<_> = v["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["path"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(actual, expected);
+    assert_eq!(v["count"], 12);
+    assert_eq!(v["truncated"], false);
+}
+
+#[test]
+fn pathological_patterns_do_not_abort_the_process() {
+    if std::env::var_os("CRABBER_GLOB_PATTERN_WORKER").is_some() {
+        return;
+    }
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "pathological_pattern_worker", "--nocapture"])
+        .env("CRABBER_GLOB_PATTERN_WORKER", "1")
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+#[tokio::test]
+async fn pathological_pattern_worker() {
+    if std::env::var_os("CRABBER_GLOB_PATTERN_WORKER").is_none() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let limits = support::limits();
+    let options = std::sync::Arc::new(crabber_tools_glob::Options {
+        root: crabber_tools_core::WorkspaceRoot::open(root.path()).unwrap(),
+        capacity: crabber_tools_core::Capacity::new(&limits).unwrap(),
+        limits,
+    });
+    for pattern in [
+        "{".repeat(300) + "a" + &"}".repeat(300),
+        "{".repeat(100000) + "a" + &"}".repeat(100000),
+        "x".repeat(4097),
+        "[".into(),
+    ] {
+        let result = crabber_tools_glob::definition(options.clone())
+            .executor
+            .execute_with_context(
+                support::context(&options.root, tokio_util::sync::CancellationToken::new()),
+                serde_json::json!({"pattern":pattern}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["error"]["category"], "validation");
+    }
+}

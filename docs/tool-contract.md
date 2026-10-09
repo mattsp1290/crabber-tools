@@ -369,3 +369,12 @@ directory batches are bounded independently of tree width. Traversal keeps no
 recursive call stack or open directory stack; exhausted/evicted batches rescan
 siblings, trading additional directory reads for bounded resources. Cancellation
 is checked during every scan and follows the common runtime interruption rule.
+
+Non-UTF-8 names use lossy display paths; distinct raw names remain separate
+results even when their displayed paths coincide. Raw bytes break display-sort
+ties, and every matched entry counts toward truncation.
+
+Glob patterns are limited to 4096 bytes and at most 16 nested unescaped brace
+groups outside character classes. These bounds precede recursive glob parsing.
+Compilation uses a fallible GlobSet builder on the blocking worker after capacity
+admission; overly complex patterns return `validation` instead of panicking.

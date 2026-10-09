@@ -1,6 +1,6 @@
 use cap_std::fs::Dir;
 use crabber_tools_core::{RelPath, ToolError, WorkspaceRoot, category, category_for_io};
-use globset::GlobMatcher;
+use globset::GlobSet;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -63,6 +63,12 @@ impl Cursor {
             .map_err(io_error)?;
         let mut names = BTreeSet::new();
         for entry in dir.entries().map_err(io_error)? {
+            #[cfg(test)]
+            SCAN_HOOK.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().take() {
+                    hook();
+                }
+            });
             check(cancel)?;
             let name = entry.map_err(io_error)?.file_name();
             if after.is_none_or(|last| name.as_os_str() > last) {
@@ -101,7 +107,7 @@ impl Cursor {
 pub(crate) fn discover(
     root: &WorkspaceRoot,
     start: RelPath,
-    pattern: GlobMatcher,
+    pattern: GlobSet,
     limit: usize,
     cancel: &CancellationToken,
 ) -> Result<Value, ToolError> {
@@ -126,10 +132,8 @@ pub(crate) fn discover(
                 Some(".git" | ".hg" | ".svn" | ".jj")
             );
         if !skip && pattern.is_match(&path) {
-            selected.insert(
-                prefix.join(&path).to_string_lossy().into_owned(),
-                meta.is_dir(),
-            );
+            let raw = prefix.join(&path);
+            selected.insert((raw.to_string_lossy().into_owned(), raw), meta.is_dir());
             if selected.len() > limit {
                 selected.pop_last();
                 truncated = true;
@@ -157,7 +161,84 @@ pub(crate) fn discover(
     }
     let paths: Vec<_> = selected
         .into_iter()
-        .map(|(path, is_dir)| json!({"path":path,"is_dir":is_dir}))
+        .map(|((path, _raw), is_dir)| json!({"path":path,"is_dir":is_dir}))
         .collect();
     Ok(json!({"outcome":"succeeded","count":paths.len(),"paths":paths,"truncated":truncated}))
+}
+
+#[cfg(test)]
+thread_local! {
+    static SCAN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crabber_tools_core::{AcquireError, Capacity, Limits, acquire_read, run_blocking};
+    use std::{sync::Arc, time::Duration};
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_during_scan_releases_worker_owned_capacity() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("entry"), "").unwrap();
+        let root = WorkspaceRoot::open(temp.path()).unwrap();
+        let limits = Limits {
+            max_in_flight: 1,
+            max_blocking_wait: Duration::from_secs(2),
+        };
+        let capacity = Capacity::new(&limits).unwrap();
+        let cancel = CancellationToken::new();
+        let permit = acquire_read(&capacity, &limits, &cancel).await.unwrap();
+        let (started, start) = tokio::sync::oneshot::channel();
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let release = gate.clone();
+        let worker_cancel = cancel.clone();
+        let worker = tokio::spawn(async move {
+            let scan_cancel = worker_cancel.clone();
+            run_blocking(&worker_cancel, move || {
+                let _permit = permit;
+                SCAN_HOOK.with(|h| {
+                    *h.borrow_mut() = Some(Box::new(move || {
+                        started.send(()).unwrap();
+                        let (lock, cv) = &*gate;
+                        let mut go = lock.lock().unwrap();
+                        while !*go {
+                            go = cv.wait(go).unwrap();
+                        }
+                    }))
+                });
+                let matcher = crate::pattern::compile("**").unwrap();
+                discover(
+                    &root,
+                    RelPath::parse("", true).unwrap(),
+                    matcher,
+                    10,
+                    &scan_cancel,
+                )
+                .unwrap_err()
+                .value()
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), start)
+            .await
+            .unwrap()
+            .unwrap();
+        cancel.cancel();
+        assert!(worker.await.unwrap().is_err());
+        let short = Limits {
+            max_blocking_wait: Duration::from_millis(10),
+            ..limits.clone()
+        };
+        assert!(matches!(
+            acquire_read(&capacity, &short, &CancellationToken::new()).await,
+            Err(AcquireError::Unavailable)
+        ));
+        {
+            let (lock, cv) = &*release;
+            *lock.lock().unwrap() = true;
+            cv.notify_all();
+        }
+        let _recovered = acquire_read(&capacity, &limits, &CancellationToken::new())
+            .await
+            .unwrap();
+    }
 }

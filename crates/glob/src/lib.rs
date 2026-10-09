@@ -7,6 +7,7 @@ use crabber_tools_core::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
+mod pattern;
 mod walk;
 
 /// Maximum number of returned paths.
@@ -55,7 +56,8 @@ fn default_limit() -> usize {
     DEFAULT_LIMIT
 }
 impl Args {
-    fn validate(self) -> Result<(RelPath, globset::GlobMatcher, usize), ToolError> {
+    fn validate(self) -> Result<(RelPath, String, usize), ToolError> {
+        pattern::validate(&self.pattern)?;
         if self.pattern.trim().is_empty()
             || self.pattern.contains('\0')
             || std::path::Path::new(&self.pattern).is_absolute()
@@ -67,12 +69,7 @@ impl Args {
                 "invalid pattern or limit",
             ));
         }
-        let pattern = globset::GlobBuilder::new(&self.pattern)
-            .literal_separator(true)
-            .build()
-            .map_err(|_| ToolError::new(category::VALIDATION, "invalid glob pattern"))?
-            .compile_matcher();
-        Ok((RelPath::parse(&self.path, true)?, pattern, self.limit))
+        Ok((RelPath::parse(&self.path, true)?, self.pattern, self.limit))
     }
 }
 fn failure(error: ToolError) -> Value {
@@ -125,7 +122,11 @@ impl ToolExecutor for GlobTool {
         let cancel = ctx.cancel.clone();
         run_blocking(&ctx.cancel, move || {
             let _permit = permit;
-            walk::discover(&options.root, args.0, args.1, args.2, &cancel).unwrap_or_else(failure)
+            match pattern::compile(&args.1) {
+                Ok(pattern) => walk::discover(&options.root, args.0, pattern, args.2, &cancel)
+                    .unwrap_or_else(failure),
+                Err(error) => failure(error),
+            }
         })
         .await
     }
