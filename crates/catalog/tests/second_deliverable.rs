@@ -153,8 +153,7 @@ async fn all_ten_tools_execute_on_one_agent_without_network_or_real_hub() {
     agent.close_extensions().await.unwrap();
 }
 fn url_from_path(path: &Path) -> String {
-    // Synthetic temporary paths are ASCII; avoid depending on URL crate through prelude.
-    format!("file://{}", path.to_str().unwrap())
+    url::Url::from_file_path(path).unwrap().into()
 }
 
 #[tokio::test]
@@ -211,4 +210,28 @@ async fn tracker_and_file_url_share_mount_capacity() {
         .await
         .unwrap();
     assert_eq!(result["content"], "ok");
+}
+
+#[tokio::test]
+async fn file_url_encodes_special_path_characters() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("percent%23path #space");
+    std::fs::create_dir(&root).unwrap();
+    let hub = tempfile::tempdir().unwrap();
+    let mut o = options(&root, hub.path());
+    o.enabled = EnabledSet::only([ToolId::UrlFetch]);
+    let path = o.root.path().join("text%23 #.txt");
+    std::fs::write(&path, "encoded path").unwrap();
+    let admitted = o.root.clone();
+    let tools = StandardTools::new(o).unwrap();
+    let result = tools.definitions()[0]
+        .definition
+        .executor
+        .execute_with_context(
+            context(&admitted, tokio_util::sync::CancellationToken::new()),
+            json!({"url":url_from_path(&path)}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["content"], "encoded path");
 }
