@@ -34,20 +34,9 @@ pub(crate) fn check(cancel: &CancellationToken) -> Result<(), ToolError> {
     }
 }
 fn mark(seen: &mut BTreeSet<PathBuf>, path: &Path) -> Result<(), ToolError> {
-    if path == Path::new(".")
-        || path.as_os_str().is_empty()
-        || seen
-            .iter()
-            .any(|p| p.starts_with(path) || path.starts_with(p))
-    {
-        return Err(ToolError::new(
-            category::VALIDATION,
-            "duplicate or overlapping patch targets",
-        ));
-    }
-    seen.insert(path.to_owned());
-    Ok(())
+    crate::targets::record(seen, path)
 }
+
 fn target(root: &WorkspaceRoot, path: &str) -> Result<PathBuf, ToolError> {
     let path = RelPath::parse(path, false)?;
     if path.is_root() {
@@ -175,15 +164,7 @@ fn update(
     content = parser::normalize(&content);
     for h in &op.hunks {
         check(cancel)?;
-        let mut positions = std::iter::once(0)
-            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
-            .filter(|&i| content[i..].starts_with(&h.old));
-        let position = positions
-            .next()
-            .ok_or_else(|| ToolError::new("conflict", "patch context does not match"))?;
-        if positions.next().is_some() {
-            return Err(ToolError::new("conflict", "patch context is ambiguous"));
-        }
+        let position = crate::matching::unique_line_match(&content, &h.old, cancel)?;
         let length = content.len() - h.old.len() + h.new.len();
         if length > MAX_FILE_BYTES {
             return Err(ToolError::new(

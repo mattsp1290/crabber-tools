@@ -7,9 +7,11 @@ use serde_json::Value;
 use std::sync::Arc;
 mod commit;
 mod info;
+mod matching;
 mod parser;
 mod preflight;
 mod result;
+mod targets;
 pub use info::info;
 /// Maximum patch input size, matching the upstream tool.
 pub const MAX_PATCH_BYTES: usize = 1024 * 1024;

@@ -369,3 +369,37 @@ fn upstream_metadata_and_documented_schema() {
     .unwrap();
     assert_eq!(schema, info.parameters);
 }
+
+#[tokio::test]
+async fn repetitive_near_match_is_preflighted_without_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let content = "a\n".repeat(4 * 1024 * 1024);
+    std::fs::write(root.path().join("large"), &content).unwrap();
+    let patch = "*** Begin Patch\n*** Update File: large\n@@\n".to_owned()
+        + &" a\n".repeat(262144)
+        + " b\n+c\n*** End Patch\n";
+    let limits = support::limits();
+    let options = std::sync::Arc::new(crabber_tools_applypatch::Options {
+        root: crabber_tools_core::WorkspaceRoot::open(root.path()).unwrap(),
+        capacity: crabber_tools_core::Capacity::new(&limits).unwrap(),
+        limits,
+    });
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crabber_tools_applypatch::definition(options.clone())
+            .executor
+            .execute_with_context(
+                support::context(&options.root, tokio_util::sync::CancellationToken::new()),
+                serde_json::json!({"patch_text":patch}),
+            ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(result["error"]["category"], "conflict");
+    assert_eq!(result["partial"], false);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("large")).unwrap(),
+        content
+    );
+}

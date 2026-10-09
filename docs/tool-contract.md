@@ -379,3 +379,8 @@ Categories: `validation`, `path_escape`, `not_found`, `not_directory`,
 `is_directory`, `too_large`, `unsupported`, `conflict`, `binary`, `io`,
 `unknown`, `workspace_mismatch`, `unavailable`. Error messages omit host paths
 and source contents. Failed results include `files`, `partial`, and `error`.
+
+Patch preflight uses linear, overlapping, line-anchored literal matching with
+cancellation checkpoints at most 4096 scanned bytes apart. Target overlap checks
+use component-aware ancestor lookup and ordered descendant lookup rather than
+scanning all earlier targets for every operation.
