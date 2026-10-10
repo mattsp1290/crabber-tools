@@ -19,6 +19,11 @@ async-trait.workspace = true
 crabber-tools-fileops.workspace = true
 crabber-tools-search.workspace = true
 crabber-tools-shell.workspace = true
+crabber-tools-glob.workspace = true
+crabber-tools-applypatch.workspace = true
+crabber-tools-urlfetch.workspace = true
+crabber-tools-trackerwrite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+url.workspace = true

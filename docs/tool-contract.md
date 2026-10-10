@@ -4,8 +4,8 @@ A success carries `outcome: "succeeded"` and normally omits `error`. Search part
 successes carry `partial: true` and a sanitized `exec_failed` error; retain their
 collected matches. A model-facing failure
 carries `outcome: "failed"` and `error: {category, message}`. Shell nonzero exits
-remain successful calls; read `exit_code`. Tool timeouts are failed/timeout with
-`timed_out: true`; `timed_out` and `rejected` outcomes are reserved for callers.
+remain successful calls; read `exit_code`. Tool deadlines produce failed/timeout; tool-specific timeout fields are described
+below. The `timed_out` and `rejected` outcomes are reserved for callers.
 Errors built by this library never contain absolute host paths, command output,
 or file contents. Search diagnostics are sanitized to enforce this rule.
 
@@ -29,8 +29,10 @@ whole process group on future drop. Timeouts allow five seconds for reaping;
 leader exit allows five seconds for inherited pipes. Detached descendants or
 children that close their pipes are not tracked; hosts own their lifecycle.
 
-Mutating tools (write, edit, shell) share a process-global lock keyed by canonical
-root. Read, list and search take capacity only and are unordered against writes.
+Workspace writers (write, edit, shell and apply_patch) share a process-global lock
+keyed by canonical root. Read, list, search, glob and URL fetch take capacity only
+and are unordered against writes. Tracker mutations use backend hub locking and
+take shared capacity without the workspace writer lock.
 One deadline bounds the combined lock and capacity wait; expiry is `unavailable`.
 Sorted directory listings use an iterative traversal with at most 5000 pending
 names across the entire tree and a constant number of open directories; enumeration
@@ -324,7 +326,7 @@ Failure categories: validation, path_escape, not_found, is_directory, not_direct
 
 ## glob
 
-Catalog id: `standard.glob` (catalog integration follows the second-deliverable crates).
+Catalog id: `standard.glob`.
 Retry safe: true. Advisory permission: `workspace.fs.read`. Include hidden entries, skip
 `.git`, `.hg`, `.svn`, `.jj` directories, and never descend through directory
 symlinks encountered during walking. An explicitly supplied search root is
@@ -381,7 +383,7 @@ admission; overly complex patterns return `validation` instead of panicking.
 
 ## apply_patch
 
-Catalog id: `standard.apply-patch` (catalog integration follows the four WP7 crates).
+Catalog id: `standard.apply-patch`.
 Retry safe: false. Advisory permission: `workspace.fs.write`.
 
 ```json
@@ -512,7 +514,7 @@ These explicit static exclusions do not guarantee routability in every network.
 
 ## tracker_write
 
-Catalog id: `standard.tracker-write` (catalog integration follows the four WP7 crates).
+Catalog id: `standard.tracker-write`.
 Retry safe: false. Advisory permission: `tracker.write`. Mutates the hub rather
 than the workspace, so it takes mount capacity without the workspace writer lock.
 Owner-approved G3 backend: the `bn` CLI.
@@ -602,3 +604,20 @@ io; command deadlines timeout. Workspace mismatch and unavailable capacity use
 the common categories. Result keys: `outcome`, `op`, `id`, and on failure
 `error {category,message,op}`. Invalid oversized op/id fields are omitted as
 empty strings to keep the error envelope bounded.
+
+## Second-deliverable catalog policies
+
+`ToolId::ALL` and `EnabledSet::all()` include all ten tools, in the original
+six-tool order followed by glob, apply_patch, url_fetch and tracker_write.
+`Options::url_fetch` and `Options::tracker` are optional only for disabled tools;
+an enabled tool with no policy is a Plan construction error. Supplied policies
+are validated even when their tool is disabled. Both policy values participate
+in the extension configuration hash, including the tracker routing, workflow and
+explicit replacement environment. Metadata remains root-free and deterministic.
+The prelude re-exports UrlFetchPolicy, HostPattern and TrackerPolicy.
+
+Workspace writer serialization applies to file_write, file_edit, shell and
+apply_patch. Glob and URL fetch are readers. Tracker write is not retry-safe,
+but uses the backend's hub synchronization instead of a workspace writer lock.
+Every registered tool uses the same mount Capacity, including tracker and URL
+operations. Existing hosts can retain a six-tool subset with both policies None.
