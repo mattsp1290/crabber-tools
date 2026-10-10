@@ -4,7 +4,7 @@ use crabber::{ExtensionError, extension::UserPrompter};
 use crabber_tools_core::{category, failed};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::task::JoinHandle;
+use tokio::{sync::OwnedSemaphorePermit, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 struct AbortOnDrop(JoinHandle<Result<String, String>>);
 impl Drop for AbortOnDrop {
@@ -29,8 +29,13 @@ pub(crate) async fn prompt(
     question: String,
     policy: &UserInteractPolicy,
     cancel: &CancellationToken,
+    permit: OwnedSemaphorePermit,
 ) -> Result<Value, ExtensionError> {
-    let mut task = AbortOnDrop(tokio::spawn(async move { prompter.ask(&question).await }));
+    let mut task = AbortOnDrop(tokio::spawn(async move {
+        // Abort is asynchronous: hold capacity until the host future is dropped.
+        let _permit = permit;
+        prompter.ask(&question).await
+    }));
     tokio::select! { biased;
         _ = cancel.cancelled() => Err(ExtensionError::Tool("cancelled".into())),
         _ = tokio::time::sleep(policy.max_wait) => Ok(failed(category::TIMEOUT, "user response timed out")),

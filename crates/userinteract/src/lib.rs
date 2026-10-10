@@ -89,13 +89,13 @@ impl ToolExecutor for UserTool {
                 "answer is reserved for the pending surface",
             )),
             Surface::Prompter { prompter, .. } => {
-                let Ok(_permit) = self.prompts.clone().try_acquire_owned() else {
+                let Ok(permit) = self.prompts.clone().try_acquire_owned() else {
                     return Ok(failed(
                         category::UNAVAILABLE,
                         "another question is outstanding",
                     ));
                 };
-                run::prompt(prompter.clone(), args.question, policy, &ctx.cancel).await
+                run::prompt(prompter.clone(), args.question, policy, &ctx.cancel, permit).await
             }
         }
     }

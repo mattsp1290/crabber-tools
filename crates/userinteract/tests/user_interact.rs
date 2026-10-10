@@ -499,3 +499,43 @@ fn no_process_io() {
         }
     }
 }
+
+#[tokio::test]
+async fn aborted_host_holds_capacity_until_dropped() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    for cancel_explicitly in [true, false] {
+        let p = hanging(1);
+        let t = tool(prompter(p.clone()));
+        let cancel = CancellationToken::new();
+        let mut first = Box::pin(invoke(&t, json!({"question":"Q?"}), cancel.clone()));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        notified(&p.started).await;
+        if cancel_explicitly {
+            cancel.cancel();
+            assert!(matches!(first.as_mut().poll(&mut cx), Poll::Ready(Err(_))));
+        }
+        drop(first);
+        // No yield: Tokio has not processed the child's abort yet.
+        let mut replacement = Box::pin(invoke(
+            &t,
+            json!({"question":"Q?"}),
+            CancellationToken::new(),
+        ));
+        let Poll::Ready(Ok(result)) = replacement.as_mut().poll(&mut cx) else {
+            panic!("replacement admitted before the old host future was dropped");
+        };
+        category(&result, "unavailable");
+        drop(replacement);
+        notified(&p.dropped).await;
+        assert_eq!(
+            invoke(&t, json!({"question":"Q?"}), CancellationToken::new())
+                .await
+                .unwrap()["answer"],
+            "recovered"
+        );
+    }
+}
