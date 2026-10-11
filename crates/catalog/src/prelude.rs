@@ -5,3 +5,4 @@ pub use crabber_tools_search::SearchPolicy;
 pub use crabber_tools_shell::{ShellPolicy, StartupMode};
 pub use crabber_tools_trackerwrite::TrackerPolicy;
 pub use crabber_tools_urlfetch::{HostPattern, UrlFetchPolicy};
+pub use crabber_tools_userinteract::{Surface, UserInteractPolicy};

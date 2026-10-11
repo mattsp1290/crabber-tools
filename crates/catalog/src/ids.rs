@@ -23,10 +23,12 @@ pub enum ToolId {
     UrlFetch,
     /// Mutate an explicitly routed tracker hub.
     TrackerWrite,
+    /// Ask the host's user a question or report a pending question.
+    UserInteract,
 }
 impl ToolId {
     /// Deterministic registration order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::FileRead,
         Self::FileWrite,
         Self::FileEdit,
@@ -37,6 +39,22 @@ impl ToolId {
         Self::ApplyPatch,
         Self::UrlFetch,
         Self::TrackerWrite,
+        Self::UserInteract,
+    ];
+    /// The eleven tools in eino-tools `catalog.Standard` at the pinned revision,
+    /// compared against `fixtures/eino-tools/catalog.json`.
+    pub const EINO_PARITY: [Self; 11] = [
+        Self::FileRead,
+        Self::FileWrite,
+        Self::FileEdit,
+        Self::FileList,
+        Self::Search,
+        Self::Shell,
+        Self::Glob,
+        Self::ApplyPatch,
+        Self::UrlFetch,
+        Self::TrackerWrite,
+        Self::UserInteract,
     ];
     /// Stable catalog id.
     pub const fn id(self) -> &'static str {
@@ -51,6 +69,7 @@ impl ToolId {
             Self::ApplyPatch => "standard.apply-patch",
             Self::UrlFetch => "standard.url-fetch",
             Self::TrackerWrite => "standard.tracker-write",
+            Self::UserInteract => "standard.user-interact",
         }
     }
     /// Model-facing tool name.
@@ -66,6 +85,7 @@ impl ToolId {
             Self::ApplyPatch => "apply_patch",
             Self::UrlFetch => "url_fetch",
             Self::TrackerWrite => "tracker_write",
+            Self::UserInteract => "user_interact",
         }
     }
     /// Whether repeating the tool has no intentional writes.
@@ -87,9 +107,13 @@ impl ToolId {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnabledSet(std::collections::BTreeSet<ToolId>);
 impl EnabledSet {
-    /// Enable all ten tools; URL and tracker policies must also be supplied.
+    /// Enable every tool in `ToolId::ALL`; URL, tracker and interaction policies are required.
     pub fn all() -> Self {
         Self::only(ToolId::ALL)
+    }
+    /// Enable the eleven eino-tools parity tools; all three optional policies are required.
+    pub fn eino_parity() -> Self {
+        Self::only(ToolId::EINO_PARITY)
     }
     /// Register exactly these ids. Does not impose run-wide restrictions.
     pub fn only(ids: impl IntoIterator<Item = ToolId>) -> Self {

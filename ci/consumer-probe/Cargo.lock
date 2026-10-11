@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-applypatch"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-catalog"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -431,6 +431,7 @@ dependencies = [
  "crabber-tools-shell",
  "crabber-tools-trackerwrite",
  "crabber-tools-urlfetch",
+ "crabber-tools-userinteract",
  "serde",
  "serde_json",
  "tokio",
@@ -452,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-core"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "cap-std",
@@ -469,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-fileops"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -486,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-glob"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -501,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-search"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -516,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-shell"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -530,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-trackerwrite"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -543,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-urlfetch"
-version = "0.1.0"
+version = "0.2.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -557,6 +558,20 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+]
+
+[[package]]
+name = "crabber-tools-userinteract"
+version = "0.2.0"
+source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
+dependencies = [
+ "async-trait",
+ "crabber",
+ "crabber-tools-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

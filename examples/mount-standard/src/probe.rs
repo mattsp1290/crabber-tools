@@ -28,6 +28,13 @@ fn turn(name: &str, args: Value) -> Vec<StreamDelta> {
         StreamDelta::Completed,
     ]
 }
+struct ScriptedPrompter;
+#[async_trait]
+impl crabber::extension::UserPrompter for ScriptedPrompter {
+    async fn ask(&self, _: &str) -> Result<String, String> {
+        Ok("yes".into())
+    }
+}
 struct Record(Arc<Mutex<Vec<Value>>>);
 #[async_trait]
 impl ToolExecutor for Record {
@@ -83,6 +90,7 @@ pub async fn run(
             ToolId::FileEdit,
             ToolId::Search,
             ToolId::Shell,
+            ToolId::UserInteract,
         ]),
         restrict_to_enabled: false,
         shell: ShellPolicy {
@@ -95,6 +103,16 @@ pub async fn run(
         search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist())?,
         url_fetch: None,
         tracker: None,
+        user_interact: Some(UserInteractPolicy {
+            surface: Surface::Prompter {
+                identity: "example-scripted".into(),
+                prompter: Arc::new(ScriptedPrompter),
+            },
+            max_question_bytes: 65536,
+            max_answer_bytes: 65536,
+            max_wait: Duration::from_secs(5),
+            max_outstanding_prompts: 1,
+        }),
         limits: Limits {
             max_in_flight: 4,
             max_blocking_wait: Duration::from_secs(2),
@@ -112,6 +130,7 @@ pub async fn run(
             json!({"path":"notes.txt","anchor":"world","replacement":"Crabber"}),
         ),
         turn("file_list", json!({})),
+        turn("user_interact", json!({"question":"Proceed?"})),
         turn("finish_job", json!({"label":"done","payload":{"ok":true}})),
     ];
     if extra.is_some() {
@@ -180,10 +199,10 @@ pub async fn run(
     else {
         panic!("probe snapshot page required")
     };
-    assert_eq!(page.tool_calls.len(), if has_extra { 8 } else { 6 });
-    assert!(settled >= 6);
+    assert_eq!(page.tool_calls.len(), if has_extra { 9 } else { 7 });
+    assert!(settled >= 7);
     for (i, call) in page.tool_calls.iter().enumerate() {
-        let expected = if i == 4 || ((i == 2 || i == 7) && deny_shell) || i == 6 {
+        let expected = if i == 4 || ((i == 2 || i == 8) && deny_shell) || i == 7 {
             ToolCallStatus::Failed
         } else {
             ToolCallStatus::Completed
@@ -196,13 +215,14 @@ pub async fn run(
             v => panic!("unexpected {v:?}"),
         }
     };
+    assert_eq!(value(5)["answer"], "yes");
     assert_eq!(value(0)["bytes_written"], 12);
     assert_eq!(value(1)["match_count"], 1);
     assert_eq!(value(3)["anchor_occurrences"], 1);
     if !deny_shell {
         assert_eq!(value(2)["stdout"], "hello world\n");
         if has_extra {
-            assert_eq!(value(7)["stdout"], "ok\n");
+            assert_eq!(value(8)["stdout"], "ok\n");
         }
     }
     assert_eq!(

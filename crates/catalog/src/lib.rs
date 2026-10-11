@@ -13,6 +13,7 @@ use crabber_tools_search::SearchPolicy;
 use crabber_tools_shell::ShellPolicy;
 use crabber_tools_trackerwrite::TrackerPolicy;
 use crabber_tools_urlfetch::UrlFetchPolicy;
+use crabber_tools_userinteract::UserInteractPolicy;
 use std::sync::Arc;
 mod ids;
 pub mod prelude;
@@ -44,6 +45,7 @@ pub fn metadata() -> Vec<(ToolId, ToolInfo, String)> {
                 ToolId::ApplyPatch => crabber_tools_applypatch::info(),
                 ToolId::UrlFetch => crabber_tools_urlfetch::info(),
                 ToolId::TrackerWrite => crabber_tools_trackerwrite::info(),
+                ToolId::UserInteract => crabber_tools_userinteract::info(),
             };
             let hash = schema_hash(&info);
             (id, info, hash)
@@ -66,7 +68,9 @@ pub struct Options {
     pub url_fetch: Option<UrlFetchPolicy>,
     /// Explicit bn backend policy; required when TrackerWrite is enabled.
     pub tracker: Option<TrackerPolicy>,
-    /// Shared finite bounds for all tools.
+    /// Explicit interaction policy; required when UserInteract is enabled.
+    pub user_interact: Option<UserInteractPolicy>,
+    /// Shared finite bounds for tools other than user_interact.
     pub limits: Limits,
 }
 /// One extension for one root. Different roots on one agent collide on tool names.
@@ -87,12 +91,20 @@ impl StandardTools {
         if let Some(policy) = &options.tracker {
             policy.validate()?;
         }
+        if let Some(policy) = &options.user_interact {
+            policy.validate()?;
+        }
         if options.enabled.contains(ToolId::UrlFetch) && options.url_fetch.is_none() {
             return Err(ExtensionError::Plan("url_fetch policy is required".into()));
         }
         if options.enabled.contains(ToolId::TrackerWrite) && options.tracker.is_none() {
             return Err(ExtensionError::Plan(
                 "tracker_write policy is required".into(),
+            ));
+        }
+        if options.enabled.contains(ToolId::UserInteract) && options.user_interact.is_none() {
+            return Err(ExtensionError::Plan(
+                "user_interact policy is required".into(),
             ));
         }
         let capacity = Capacity::new(&options.limits)?;
@@ -158,6 +170,13 @@ impl StandardTools {
                             })?,
                         },
                     ))?,
+                    ToolId::UserInteract => crabber_tools_userinteract::definition(Arc::new(
+                        crabber_tools_userinteract::Options {
+                            policy: options.user_interact.clone().ok_or_else(|| {
+                                ExtensionError::Plan("user_interact policy is required".into())
+                            })?,
+                        },
+                    ))?,
                 };
                 definitions.push(Definition {
                     id,
@@ -182,6 +201,7 @@ impl StandardTools {
             &options.search,
             &options.url_fetch,
             &options.tracker,
+            &options.user_interact,
             &options.limits,
             options.root.path(),
             options.restrict_to_enabled,
