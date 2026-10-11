@@ -36,6 +36,7 @@ fn options(path: &std::path::Path) -> Options {
         search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist()).unwrap(),
         url_fetch: None,
         tracker: None,
+        user_interact: None,
         limits: Limits {
             max_in_flight: 4,
             max_blocking_wait: Duration::from_secs(2),
@@ -46,7 +47,13 @@ fn options(path: &std::path::Path) -> Options {
 fn metadata_parity_docs_hashes_and_prelude() {
     let first = metadata();
     assert_eq!(first, metadata());
-    // WP7 adds four upstream schemas; the existing six hashes stay unchanged.
+    // Hashes are appended in ToolId::ALL order; existing entries never change.
+    assert_eq!(ToolId::EINO_PARITY.len(), 11);
+    assert!(
+        ToolId::EINO_PARITY
+            .iter()
+            .all(|id| ToolId::ALL.contains(id))
+    );
     let hashes: Vec<String> = serde_json::from_str(include_str!("hashes.json")).unwrap();
     assert_eq!(
         first.iter().map(|x| x.2.clone()).collect::<Vec<_>>(),
@@ -75,8 +82,13 @@ fn metadata_parity_docs_hashes_and_prelude() {
                 ToolId::FileWrite | ToolId::FileEdit | ToolId::Shell | ToolId::ApplyPatch
             )
         );
+        let dir = if ToolId::EINO_PARITY.contains(&id) {
+            "eino-tools"
+        } else {
+            "crabber-tools"
+        };
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../../fixtures/eino-tools/{}.json", info.name));
+            .join(format!("../../fixtures/{dir}/{}.json", info.name));
         let mut golden: Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         for d in allowed.iter().filter(|d| d["tool"] == info.name) {
@@ -118,6 +130,7 @@ fn metadata_parity_docs_hashes_and_prelude() {
         UrlFetchPolicy,
         TrackerPolicy,
     )> = None;
+    let _: Option<(UserInteractPolicy, Surface)> = None;
 }
 #[test]
 fn hashes_cover_policies_root_enabled_and_restrictions() {
@@ -271,4 +284,101 @@ async fn all_six_tools_execute_and_probe() {
     agent.close_extensions().await.unwrap();
     probe::run(false, None).await.unwrap();
     probe::run(true, None).await.unwrap();
+}
+
+#[derive(serde::Deserialize)]
+struct UpstreamRow {
+    id: String,
+    name: String,
+    binding: String,
+    retry_safe: bool,
+    // Rust has no per-tool concurrency flag; docs/parity.md records this.
+    #[serde(rename = "concurrent")]
+    _concurrent: bool,
+}
+fn upstream_catalog() -> Vec<UpstreamRow> {
+    serde_json::from_str(include_str!("../../../fixtures/eino-tools/catalog.json")).unwrap()
+}
+#[test]
+fn catalog_matches_upstream_definitions() {
+    use std::collections::BTreeSet;
+    let rows = upstream_catalog();
+    assert_eq!(rows.len(), 11);
+    assert_eq!(
+        rows.iter().map(|r| r.id.as_str()).collect::<BTreeSet<_>>(),
+        ToolId::EINO_PARITY.map(ToolId::id).into_iter().collect()
+    );
+    for row in rows {
+        let id = ToolId::EINO_PARITY
+            .into_iter()
+            .find(|id| id.id() == row.id)
+            .unwrap();
+        assert_eq!(id.name(), row.name);
+        assert_eq!(id.retry_safe(), row.retry_safe);
+        assert_eq!(id.mutating(), !row.retry_safe && row.binding == "workspace");
+    }
+}
+#[test]
+fn fixture_names_match_catalog_rows() {
+    use std::collections::BTreeSet;
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/eino-tools");
+    let names: BTreeSet<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.extension().is_some_and(|e| e == "json") && p.file_stem().unwrap() != "catalog"
+        })
+        .map(|p| p.file_stem().unwrap().to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        upstream_catalog().into_iter().map(|r| r.name).collect()
+    );
+}
+#[test]
+fn parity_docs_cover_allowed_diffs_and_inventory() {
+    let doc = include_str!("../../../docs/parity.md");
+    let allowed = include_str!("../../../fixtures/eino-tools/ALLOWED-DIFFS.md");
+    let allowed: Vec<Value> = serde_json::from_str(
+        allowed
+            .split("```json\n")
+            .nth(1)
+            .unwrap()
+            .split("```")
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    for entry in allowed {
+        assert!(doc.contains(entry["tool"].as_str().unwrap()));
+        assert!(doc.contains(entry["pointer"].as_str().unwrap()));
+    }
+    for heading in [
+        "Package map",
+        "Deliberate deviations",
+        "Per-tool contract matrix",
+        "Beyond parity",
+        "How parity is verified",
+    ] {
+        assert!(doc.contains(&format!("## {heading}\n")));
+    }
+    let matrix = doc
+        .split("## Per-tool contract matrix\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    for stem in [
+        "fileops",
+        "glob",
+        "search",
+        "shell",
+        "applypatch",
+        "urlfetch",
+        "trackerwrite",
+        "userinteract",
+    ] {
+        assert!(matrix.contains(&format!("### {stem}\n")));
+    }
 }

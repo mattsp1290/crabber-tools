@@ -6,6 +6,8 @@ collected matches. A model-facing failure
 carries `outcome: "failed"` and `error: {category, message}`. Shell nonzero exits
 remain successful calls; read `exit_code`. Tool deadlines produce failed/timeout; tool-specific timeout fields are described
 below. The `timed_out` and `rejected` outcomes are reserved for callers.
+`user_interact` alone may return `outcome: "pending"` with the echoed `question`;
+it is the only tool-local outcome and never carries `error`.
 Errors built by this library never contain absolute host paths, command output,
 or file contents. Search diagnostics are sanitized to enforce this rule.
 
@@ -32,7 +34,9 @@ children that close their pipes are not tracked; hosts own their lifecycle.
 Workspace writers (write, edit, shell and apply_patch) share a process-global lock
 keyed by canonical root. Read, list, search, glob and URL fetch take capacity only
 and are unordered against writes. Tracker mutations use backend hub locking and
-take shared capacity without the workspace writer lock.
+take shared capacity without the workspace writer lock. `user_interact` takes
+neither the writer lock nor mount capacity; its own `max_outstanding_prompts`
+semaphore bounds host prompts.
 One deadline bounds the combined lock and capacity wait; expiry is `unavailable`.
 Sorted directory listings use an iterative traversal with at most 5000 pending
 names across the entire tree and a constant number of open directories; enumeration
@@ -605,19 +609,87 @@ the common categories. Result keys: `outcome`, `op`, `id`, and on failure
 `error {category,message,op}`. Invalid oversized op/id fields are omitted as
 empty strings to keep the error envelope bounded.
 
-## Second-deliverable catalog policies
+## user_interact
 
-`ToolId::ALL` and `EnabledSet::all()` include all ten tools, in the original
-six-tool order followed by glob, apply_patch, url_fetch and tracker_write.
-`Options::url_fetch` and `Options::tracker` are optional only for disabled tools;
-an enabled tool with no policy is a Plan construction error. Supplied policies
-are validated even when their tool is disabled. Both policy values participate
-in the extension configuration hash, including the tracker routing, workflow and
-explicit replacement environment. Metadata remains root-free and deterministic.
-The prelude re-exports UrlFetchPolicy, HostPattern and TrackerPolicy.
+Id: `standard.user-interact`. retry_safe: `false`. Advisory permission: `interaction.ask`.
 
-Workspace writer serialization applies to file_write, file_edit, shell and
-apply_patch. Glob and URL fetch are readers. Tracker write is not retry-safe,
-but uses the backend's hub synchronization instead of a workspace writer lock.
+```json
+{
+  "properties": {
+    "question": {
+      "minLength": 1,
+      "description": "The question to present to the user.",
+      "type": "string"
+    },
+    "answer": {
+      "description": "Reserved for relaying an answer the host already collected for a pending question; when non-empty, the tool returns it immediately. Rejected when the host has a prompter configured. Leave empty when asking.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "question"
+  ],
+  "type": "object"
+}
+```
+
+Unknown fields are rejected; `answer` defaults to empty. Validation order is:
+empty/whitespace question (`validation`), question controls other than newline,
+carriage return and tab (`validation`), question byte bound (`too_large`), answer
+NUL (`validation`), then answer byte bound (`too_large`). Context is required.
+
+| Surface | Answer | Behavior |
+| --- | --- | --- |
+| `Pending` | Empty | `outcome: pending`, echoed `question`, no error |
+| `Pending` | Nonempty | `outcome: succeeded`, echoed `answer` |
+| `Prompter` | Nonempty | `failed/validation`, answer reserved for pending surface |
+| `Prompter` | Empty | Ask the host, subject to the prompt semaphore and deadline |
+
+`Surface::Pending` is a relay, not a gate. A model can supply `answer` and receive
+`succeeded` without human involvement. There is no approval enforcement or
+question/answer correlation. Hosts must not treat this success as human consent;
+use `Surface::Prompter` when a human must answer.
+
+Prompter admission is immediate: exhaustion returns `failed/unavailable` with
+"another question is outstanding". The host future runs in an abort-on-drop task
+that owns the prompt permit until the host future actually drops. Biased selection
+checks cancellation before the deadline and host reply. Cancellation is an
+executor error; deadline expiry is `failed/timeout` ("user response timed out").
+Successful host replies have trailing newline characters trimmed, then NUL and
+size checks repeated. Success returns `outcome` and nonempty `answer`; an empty
+answer is omitted. Host errors become `failed/io` ("prompt failed"), discarding
+host text. A host panic becomes `failed/unknown` ("prompter panicked").
+
+`UserInteractPolicy::pending()` defaults to 64 KiB question, 1 MiB answer,
+300-second wait, and one outstanding prompt. Host bounds must be positive and
+at most 64 KiB question, 1 MiB answer, 600-second wait and 16 outstanding prompts,
+including for `Pending`. Prompter identity is 1..128 ASCII bytes, alphanumeric or
+`-`, `_`, `.`, `/`, with no leading `-`; it participates in mount identity.
+
+Prompters must be drop-safe and must not block while polled. Questions and answers
+cross the host boundary unredacted; this tool must not collect secrets. Hosts own
+admission, permissions and redaction. No stdin/stderr is used. The prompter,
+answer precedence, control checks, byte/wait bounds, prompt capacity and absence
+of a model-facing `canceled` category differ from upstream. Categories are
+`validation`, `too_large`, `io`, `timeout`, `unavailable`, `unknown`.
+
+## Catalog policies
+
+`ToolId::ALL` and `EnabledSet::all()` include eleven tools: the original six
+(file_read, file_write, file_edit, file_list, search, shell), then glob,
+apply_patch, url_fetch, tracker_write and user_interact. `ToolId::EINO_PARITY`
+is the explicit eleven-tool upstream set; `EnabledSet::eino_parity()` selects it.
+`Options::url_fetch`, `Options::tracker` and `Options::user_interact` are optional
+only for disabled tools; an enabled tool without its policy is a Plan construction
+error. The parity set requires all three to be `Some`. Supplied policies are
+validated even when disabled, and all three values participate in configuration
+identity, including routing, workflow, environment, prompt surface and bounds.
+Metadata remains root-free and deterministic. The prelude re-exports
+`UrlFetchPolicy`, `HostPattern`, `TrackerPolicy`, `UserInteractPolicy`, `Surface`.
+
+Writer serialization applies to file_write, file_edit, shell and apply_patch.
+Glob and URL fetch are readers. Tracker writes use backend hub synchronization.
 Every registered tool uses the same mount Capacity, including tracker and URL
-operations. Existing hosts can retain a six-tool subset with both policies None.
+operations, except `user_interact`, which has none. Hosts can retain a six-tool
+subset with all three optional policies `None`.
