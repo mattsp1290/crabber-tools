@@ -93,6 +93,8 @@ pub async fn run(
             output_cap_bytes: 65536,
         },
         search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist())?,
+        url_fetch: None,
+        tracker: None,
         limits: Limits {
             max_in_flight: 4,
             max_blocking_wait: Duration::from_secs(2),

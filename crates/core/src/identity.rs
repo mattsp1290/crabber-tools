@@ -25,6 +25,8 @@ pub fn config_hash(value: &impl Serialize) -> String {
 }
 /// Advisory permissions; hosts must enforce their own permission policy.
 pub mod permission {
+    /// Ask the host user a question.
+    pub const INTERACTION_ASK: &str = "interaction.ask";
     /// Read workspace files.
     pub const FS_READ: &str = "workspace.fs.read";
     /// Mutate workspace files.

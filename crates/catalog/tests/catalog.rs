@@ -17,7 +17,14 @@ use support::*;
 fn options(path: &std::path::Path) -> Options {
     Options {
         root: WorkspaceRoot::open(path).unwrap(),
-        enabled: EnabledSet::all(),
+        enabled: EnabledSet::only([
+            ToolId::FileRead,
+            ToolId::FileWrite,
+            ToolId::FileEdit,
+            ToolId::FileList,
+            ToolId::Search,
+            ToolId::Shell,
+        ]),
         restrict_to_enabled: false,
         shell: ShellPolicy {
             shell_binary: "/bin/sh".into(),
@@ -27,6 +34,8 @@ fn options(path: &std::path::Path) -> Options {
             output_cap_bytes: 65536,
         },
         search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist()).unwrap(),
+        url_fetch: None,
+        tracker: None,
         limits: Limits {
             max_in_flight: 4,
             max_blocking_wait: Duration::from_secs(2),
@@ -37,7 +46,7 @@ fn options(path: &std::path::Path) -> Options {
 fn metadata_parity_docs_hashes_and_prelude() {
     let first = metadata();
     assert_eq!(first, metadata());
-    // Initial first-deliverable schemas, including the explicit policy description deviations.
+    // WP7 adds four upstream schemas; the existing six hashes stay unchanged.
     let hashes: Vec<String> = serde_json::from_str(include_str!("hashes.json")).unwrap();
     assert_eq!(
         first.iter().map(|x| x.2.clone()).collect::<Vec<_>>(),
@@ -59,7 +68,13 @@ fn metadata_parity_docs_hashes_and_prelude() {
     for (id, info, _) in first {
         assert_eq!(info.name, id.name());
         assert_eq!(info.retry_safe, id.retry_safe());
-        assert_eq!(id.mutating(), !info.retry_safe);
+        assert_eq!(
+            id.mutating(),
+            matches!(
+                id,
+                ToolId::FileWrite | ToolId::FileEdit | ToolId::Shell | ToolId::ApplyPatch
+            )
+        );
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../fixtures/eino-tools/{}.json", info.name));
         let mut golden: Value =
@@ -95,7 +110,14 @@ fn metadata_parity_docs_hashes_and_prelude() {
     }
     assert_eq!(used, allowed.len());
     // These names compile from the prelude alone.
-    let _: Option<(Definition, RelPath, RunAs)> = None;
+    let _: Option<(
+        Definition,
+        RelPath,
+        RunAs,
+        HostPattern,
+        UrlFetchPolicy,
+        TrackerPolicy,
+    )> = None;
 }
 #[test]
 fn hashes_cover_policies_root_enabled_and_restrictions() {

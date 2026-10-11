@@ -31,3 +31,12 @@ documented in `docs/tool-contract.md`.
 revision using `trackerwrite.ToolInfo()` and `info.ToJSONSchema()` in the
 throwaway extractor. Its parity test compares independently implemented Rust
 metadata with the fixture; production does not load the fixture.
+
+`user_interact.json` was extracted on 2026-10-10 from an archive of the same
+immutable revision using `userinteract.ToolInfo()` and `info.ToJSONSchema()`.
+The extractor also regenerated all ten existing metadata fixtures with no JSON
+value differences. The upstream userinteract test file is copied byte-for-byte
+into `crates/userinteract/tests/fixtures/upstream_userinteract_test.go`;
+`go-cases.json` records every Run case and the source SHA256. CLI cases use a
+host prompter; both upstream answer-provided cases use the pending surface,
+because the prompter deliberately rejects model-supplied answers.

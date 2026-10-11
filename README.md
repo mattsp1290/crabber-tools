@@ -1,16 +1,16 @@
 # crabber-tools
 
 Workspace coding tools for Crabber, mirroring eino-tools: `file_read`, `file_write`,
-`file_edit`, `file_list`, `search`, and `shell`. One catalog extension mounts a
+`file_edit`, `file_list`, `search`, `shell`, `glob`, `apply_patch`, `url_fetch`,
+and `tracker_write`. One catalog extension mounts a
 host-chosen subset with bounded work, capability-rooted file access, and process
 group cleanup on cancellation. Unix only; Rust 2024, toolchain 1.99.0.
 
 Depend on `crabber-tools-catalog` at an immutable git revision. This workspace
 pins Crabber at `883189465397b2fd326a6ef358c8a2fbd39fbec8`, matching
 crabber-extensions `8c611687723a79944226fa61501be64e4e81a74f`. All three must use
-one Crabber revision. Private sources require SSH read access locally; CI needs
-`CRABBER_READ_TOKEN` with read access to crabber, crabber-extensions and
-crabber-tools. Enable the `CONSUMER_PROBE=true` repository variable for the
+one Crabber revision. These repositories are public; CI rewrites SSH dependency
+URLs to HTTPS and optionally uses `CRABBER_READ_TOKEN` when configured. Enable the `CONSUMER_PROBE=true` repository variable for the
 standalone consumer CI job.
 
 ## Quick start
@@ -39,6 +39,8 @@ let tools = StandardTools::new(Options {
         output_cap_bytes: 65536,
     },
     search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist())?,
+    url_fetch: None,
+    tracker: None,
     limits: Limits { max_in_flight: 4, max_blocking_wait: Duration::from_secs(2) },
 })?;
 let mut config = AgentConfig::new(Selection {
@@ -71,6 +73,10 @@ and checks persisted results.
 | crabber-tools-fileops | Reads, atomic writes, anchored edits and directory listings |
 | crabber-tools-search | Bounded streaming ripgrep JSON search; requires rg >=14 |
 | crabber-tools-shell | Explicit login/non-login shell policy, bounded output and timeouts |
+| crabber-tools-glob | Sorted capability-confined path discovery |
+| crabber-tools-applypatch | Preflighted multi-file patches with atomic per-file commits |
+| crabber-tools-urlfetch | Policy-constrained HTTPS and workspace-confined file text |
+| crabber-tools-trackerwrite | Explicit bn-backed tracker mutations with bounded lifecycle |
 | crabber-tools-catalog | Deterministic metadata, allowlists, Extension and host prelude |
 
 ## Host responsibilities
@@ -108,10 +114,26 @@ credentials or network. CI runs Linux and macOS and a standalone consumer graph
 with crabber-extensions' command guard and a host tool. The consumer template
 substitutes the candidate SHA in both manifest and lockfile before `--locked`.
 
-This is the first deliverable for request `crabber-r-5fxy`. Release tagging and
-the consumer's flows-guest probe follow merge and green CI. The second deliverable
-(`glob`, `apply_patch`, `url_fetch`, `tracker_write`) remains gated on that release,
-the request update, and the owner's URL/tracker policy decisions.
+The first deliverable for request `crabber-r-5fxy` is tagged `v0.1.0` at
+`3abb69425ed2d3beda740b0896cd0c59e90bdc81`. The second deliverable adds the four
+crates above with the owner-approved URL policy and bn backend.
+
+`EnabledSet::all()` includes all ten tools. Enabling `UrlFetch` requires
+`url_fetch: Some(UrlFetchPolicy::default())`; that policy denies private and
+special-purpose destinations by default and has an empty host allowlist.
+Enabling `TrackerWrite` requires `tracker: Some(TrackerPolicy { .. })` with an
+absolute bn executable, explicit hub/project/actor, allowed workflow states and
+replacement environment. The host supplies these values from its configuration;
+there is no inherited tracker namespace. Keep the policy `None` when the tool is
+disabled. Missing required policies fail construction instead of omitting tools.
+Any supplied policy is validated, even for a disabled tool.
+
+The example retains a first-deliverable subset and leaves both optional policies
+`None`; it requires no tracker installation or network. The all-ten-tools catalog
+runtime test uses a synthetic bn backend and a confined file URL. Tracker writes
+mutate the hub and are not retry-safe, but do not take the workspace writer lock.
+All ten tools share mount capacity. Consumer `flows-guest` evidence and the owner's
+request-scope decision remain required before resolving the parent request.
 
 To materialize the standalone consumer outside this workspace, copy both the
 template and its canonical harness, then replace `CRABBER_TOOLS_REV` in the

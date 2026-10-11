@@ -26,7 +26,11 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 url = "2"
 globset = "0.4"
 
+crabber-tools-glob = { path = "crates/glob" }
+crabber-tools-applypatch = { path = "crates/applypatch" }
+crabber-tools-trackerwrite = { path = "crates/trackerwrite" }
 crabber-tools-urlfetch = { path = "crates/urlfetch" }
+crabber-tools-userinteract = { path = "crates/userinteract" }
 crabber-tools-core = { path = "crates/core" }
 crabber-tools-fileops = { path = "crates/fileops" }
 crabber-tools-search = { path = "crates/search" }
