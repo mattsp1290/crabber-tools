@@ -503,9 +503,12 @@ and keep shared capacity until the blocking task exits after cancellation or
 timeout. File operations do not take the workspace writer lock. The host owns
 admission and redaction; this crate does not parse or sanitize HTML.
 
-Errors include `validation`, `path_escape`, `not_found`, `io`, `network`,
+Errors include `validation`, `path_escape`, `not_found`, `not_directory`,
+forwarded `is_directory` filesystem errors, `io`, `network`,
 `too_large`, `binary`, `timeout`, `workspace_mismatch`, `unavailable` and `unknown`.
-Cancellation is an executor error. Differences from eino-tools are confined file
+A file URL whose ancestor is a regular file returns `not_directory`; a directory
+resource detected by metadata returns `io`. Cancellation is an executor error.
+Differences from eino-tools are confined file
 URLs, bounded work/body/redirects, explicit network policy and UTF-8 validation.
 Metadata preserves the independent upstream description and schema; this section
 defines the Rust runtime's stricter bounds and redirect policy.

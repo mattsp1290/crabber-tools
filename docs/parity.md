@@ -43,7 +43,7 @@ of exact runtime equivalence.
 | D9 | Search schema / output | search `/description` adds host policy; `/parameters/properties/limit/minimum` is 0, selecting default 200. Diagnostics are fixed/sanitized instead of retaining stderr. Retained serialized matches are byte-bounded, submatch offsets reference returned UTF-8 bytes, malformed input/overflow is bounded. Path validation followed by rg resolution retains an accepted symlink TOCTOU window. |
 | D10 | Glob resource policy | Bounded directory batches and retained matches may rescan siblings. Pattern byte/brace/complexity bounds add validation failures. No ignore-file support (also absent upstream). Lossy display ties use raw bytes and remain separate entries. |
 | D11 | Patch resource / commit policy | Additional 16 MiB per-file and 64 MiB aggregate caps yield too_large. Capability alias targets are checked for overlap; add/move installation is no-clobber. Commit failure partial=true is conservative even if no file was changed by the failing operation. diff_truncated is omitted (no generated diff); Rust always emits partial=false where Go may omit it, and marks a failed move as failed rather than partial; not_directory, workspace_mismatch and unavailable are additional categories. |
-| D12 | URL policy | File URLs are workspace-confined. HTTPS has explicit host/address policy, pinned DNS, no proxy/retry, manually checked redirects (max five), 30-second total deadline, 8192-byte URLs and 1 MiB UTF-8 bodies. Adds path_escape, too_large, binary, timeout, workspace_mismatch, unavailable. file://localhost normalizes locally; other authorities and file queries fail validation. |
+| D12 | URL policy | File URLs are workspace-confined. HTTPS has explicit host/address policy, pinned DNS, no proxy/retry, manually checked redirects (max five), 30-second total deadline, 8192-byte URLs and 1 MiB UTF-8 bodies. Adds path_escape, not_directory and forwarded is_directory filesystem errors, too_large, binary, timeout, workspace_mismatch, unavailable. Directory resources detected by metadata return io. file://localhost normalizes locally; other authorities and file queries fail validation. |
 | D13 | Tracker backend | bn CLI replaces CloseWriter and optional capability traits. Comment/transition are always available under host workflow policy; link_pr remains unsupported_op. IDs, states, reason and input bounds validate before dispatch. Empty reason uses a default. Exit-code mapping differs from typed adapter errors (see matrix); adds io, workspace_mismatch and unavailable. No raw output, paths or credentials in errors. |
 | D14 | Interaction surface / metadata | Host UserPrompter replaces stdin/stderr. user_interact `/description` describes host collection; `/parameters/properties/answer/description` reserves relayed answers for Pending and rejects them on Prompter. Questions and answers cross the host boundary unredacted; do not collect secrets. |
 | D15 | Interaction validation / bounds | Questions reject controls except newline/carriage return/tab. Answers reject NUL. Whole question/answer byte caps add too_large; bounded host wait adds timeout and own prompt semaphore adds unavailable. Host errors are sanitized; host panics yield unknown. Hosts must supply drop-safe, nonblocking futures. |
@@ -69,7 +69,7 @@ meaning, subject to the documented optional-field omissions, not byte equality.
 | Upstream keys | Rust mapping |
 | --- | --- |
 | outcome, error.category, error.message | Mirrored; early validation/admission failures may omit path (D5/D7/D17). |
-| Read: path, content, content_bytes, truncated, numbered_content, line_start, line_end, total_lines, next_offset, line_truncated, truncation_reason | Mirrored; empty content/content_bytes and zero/false optional fields omitted. Prefix truncation adds truncation_reason=prefix (D17). |
+| Read: path, content, content_bytes, truncated, numbered_content, line_start, line_end, total_lines, next_offset, line_truncated, truncation_reason | Mirrored; empty content/content_bytes and zero/false optional fields omitted. Prefix truncation_reason=prefix is also emitted upstream. |
 | Write: path, bytes_written, created | Mirrored; bytes_written includes zero. |
 | Edit: path, bytes_written, anchor_occurrences | Mirrored; contextual failures include anchor_occurrences=0; context-free execute omits it (D17). |
 | List: path, entries[].path, entries[].is_dir, truncated | Mirrored; truncated omitted unless true. |
@@ -137,8 +137,10 @@ and ownership are D6. Per-file commits are not a multi-file transaction.
 
 Mirrored categories: validation, not_found (file missing or HTTP 404), io,
 network (transport and other HTTP failure), unknown. `canceled` has no Rust
-envelope (D7). Added path_escape, too_large, binary, timeout, workspace_mismatch,
-unavailable (D12/D5/D7). File confinement, UTF-8, DNS and redirect behavior are D12.
+envelope (D7). Added path_escape, not_directory and forwarded is_directory filesystem
+errors, too_large, binary, timeout, workspace_mismatch, unavailable (D12/D5/D7).
+A regular-file ancestor returns not_directory; directory resources detected by
+metadata return io. File confinement, UTF-8, DNS and redirect behavior are D12.
 
 ### trackerwrite
 

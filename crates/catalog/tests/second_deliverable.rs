@@ -159,8 +159,11 @@ async fn all_parity_tools_execute_on_one_agent_without_network_or_real_hub() {
     assert_eq!(records.len(), 12);
     for r in &records {
         assert_eq!(r.status, crabber::core::ToolCallStatus::Completed, "{r:?}");
-        if value(r)["outcome"] != "pending" {
-            assert_eq!(value(r)["outcome"], "succeeded", "{r:?}");
+        let result = value(r);
+        if result["outcome"] == "pending" {
+            assert_eq!(r.name, "user_interact", "{r:?}");
+        } else {
+            assert_eq!(result["outcome"], "succeeded", "{r:?}");
         }
     }
     assert_eq!(
