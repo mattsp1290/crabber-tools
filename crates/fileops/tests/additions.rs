@@ -480,3 +480,77 @@ async fn multi_edit_failure_keys_cover_each_stage() {
     let v=call(tool,&o,json!({"path":"x","edits":[{"anchor":"a","replacement":"x".repeat(fileops::MAX_OUTPUT_BYTES+1)}]})).await;
     assert_eq!(keys(&v), ["edits_applied", "error", "outcome"]);
 }
+
+#[tokio::test]
+async fn panicking_move_hook_reports_state_and_releases_guards() {
+    use std::os::unix::fs::PermissionsExt;
+    struct Restore(std::path::PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    for partial in [false, true] {
+        if partial && rustix::process::geteuid().is_root() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "panicking_move_hook_reports_state_and_releases_guards requires non-root CI"
+            );
+            // Root bypasses directory permissions; retain the successful rollback case.
+            continue;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("source"), b"original").unwrap();
+        let destination = temp.path().join("dst");
+        std::fs::create_dir(&destination).unwrap();
+        let _restore = Restore(destination.clone());
+        let mut o = options(temp.path());
+        Arc::get_mut(&mut o).unwrap().pre_write = Some(Arc::new(move || {
+            if partial {
+                std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o500))
+                    .unwrap();
+            }
+            panic!("private panic payload must not enter tool result");
+        }));
+        let value = call(
+            fileops::file_move::definition(o.clone()),
+            &o,
+            json!({"path":"source","new_path":"dst/new"}),
+        )
+        .await;
+        assert_eq!(value["outcome"], "failed");
+        assert_eq!(value["error"]["category"], "unknown");
+        assert_eq!(value["path"], "source");
+        assert_eq!(value["new_path"], "dst/new");
+        let expected = if partial {
+            vec!["error", "new_path", "outcome", "partial", "path"]
+        } else {
+            vec!["error", "new_path", "outcome", "path"]
+        };
+        assert_eq!(keys(&value), expected);
+        if partial {
+            assert_eq!(value["partial"], true);
+        }
+        assert!(!value.to_string().contains("private panic payload"));
+        assert_eq!(temp.path().join("dst/new").exists(), partial);
+        assert_eq!(
+            std::fs::read(temp.path().join("source")).unwrap(),
+            b"original"
+        );
+        let next = Arc::new(Options {
+            root: o.root.clone(),
+            capacity: o.capacity.clone(),
+            limits: o.limits.clone(),
+            pre_write: None,
+        });
+        assert_eq!(
+            call(
+                fileops::write::definition(next.clone()),
+                &next,
+                json!({"path":"following","content":"ok"})
+            )
+            .await["outcome"],
+            "succeeded"
+        );
+    }
+}

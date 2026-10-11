@@ -130,21 +130,32 @@ impl Request {
                 hook();
             }
         });
-        if let Some(hook) = &options.pre_write {
-            hook();
-        }
-        if dir.remove_file(self.path.as_path()).is_err() {
-            if dir.remove_file(destination).is_ok() {
-                return Err(ToolError::new(category::IO, "move could not remove source"));
+        // Catch the public host hook here so its panic cannot strand an unreported link.
+        let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(hook) = &options.pre_write {
+                hook();
             }
-            let mut out = failed(
+            dir.remove_file(self.path.as_path())
+        }));
+        let (category, rollback_message, partial_message) = match removal {
+            Ok(Ok(())) => return Ok(json!({"outcome":"succeeded"})),
+            Ok(Err(_)) => (
                 category::IO,
+                "move could not remove source",
                 "move installed destination but could not remove source",
-            );
-            out["partial"] = json!(true);
-            return Ok(out);
+            ),
+            Err(_) => (
+                category::UNKNOWN,
+                "move hook panicked; destination rolled back",
+                "move hook panicked; destination could not be rolled back",
+            ),
+        };
+        if dir.remove_file(destination).is_ok() {
+            return Err(ToolError::new(category, rollback_message));
         }
-        Ok(json!({"outcome":"succeeded"}))
+        let mut out = failed(category, partial_message);
+        out["partial"] = json!(true);
+        Ok(out)
     }
 }
 
@@ -298,5 +309,41 @@ mod fault_tests {
             link_error(io::Error::from_raw_os_error(libc::EXDEV)).message,
             "destination is on a different filesystem"
         );
+    }
+    #[test]
+    fn panicking_host_hook_rolls_back_or_reports_partial() {
+        for partial in [false, true] {
+            if partial && rustix::process::geteuid().is_root() {
+                assert!(
+                    std::env::var_os("CI").is_none(),
+                    "panicking_host_hook_rolls_back_or_reports_partial requires a non-root CI runner"
+                );
+                // Root bypasses directory write permissions; always retain successful rollback coverage.
+                continue;
+            }
+            let (temp, mut options, request, _) = fixture();
+            let destination = temp.path().join("dst");
+            let _restore = RestorePermissions(vec![destination.clone()]);
+            options.pre_write = Some(Arc::new(move || {
+                if partial {
+                    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o500))
+                        .unwrap();
+                }
+                panic!("injected host hook panic");
+            }));
+            let value = request.run(&options, &tokio_util::sync::CancellationToken::new());
+            assert_eq!(value["error"]["category"], "unknown");
+            assert_eq!(value["path"], "src/file");
+            assert_eq!(value["new_path"], "dst/new");
+            assert_eq!(value.get("partial").is_some(), partial);
+            if partial {
+                assert_eq!(value["partial"], true);
+            }
+            assert_eq!(temp.path().join("dst/new").exists(), partial);
+            assert_eq!(
+                std::fs::read(temp.path().join("src/file")).unwrap(),
+                b"original"
+            );
+        }
     }
 }

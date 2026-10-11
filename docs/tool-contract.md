@@ -794,11 +794,13 @@ Uses a capability-directory hard link followed by source removal; inode, mode an
 
 `create_dirs: true` creates destination parents; these directories remain after later failure. Without it, missing parents fail `not_found`. A destination appearing during the move fails `conflict` without being overwritten. The linked name is checked to reject a source raced into a symlink. The host pre_write hook fires between link and unlink; an already running blocking move finishes with its guards held after Agent interruption.
 
+If the host pre_write hook panics, the destination is rolled back and the result is `failed/unknown` with `path` and `new_path`. If that cleanup also fails, `partial: true` reports that both names may remain. Panic payloads are never returned.
+
 If source removal fails, the destination is removed to roll back: `io` with message "move could not remove source", no `partial`. If rollback also fails: `io` with message "move installed destination but could not remove source" and `partial: true`; both names may remain. Retrying then reports `conflict`; inspect with `file_list`. A host crash in the two-name window can also leave both names, without a returned `partial` result.
 
 No cross-filesystem copy fallback. `EXDEV` maps to `io` with "destination is on a different filesystem". Filesystems without hard links, protected_hardlinks restrictions for a source not owned by the host uid, and link-count limits map to `io` with "filesystem refused the link". For either message use `apply_patch` move (content rewrite), or `file_read` plus `file_write` plus `file_delete`.
 
-Success keys: `outcome`, `path`, `new_path`. Failure keys: `outcome`, `error`; all run-stage failures also include `path`, `new_path`, with `partial: true` only for rollback failure. Parse (`validation`, `path_escape`) and pre-run (`workspace_mismatch`, `unavailable`) failures have no path keys. Cancellation returns an executor error.
+Success keys: `outcome`, `path`, `new_path`. Failure keys: `outcome`, `error`; all run-stage failures also include `path`, `new_path`, with `partial: true` only for rollback failure after source removal failure or host-hook panic. Parse (`validation`, `path_escape`) and pre-run (`workspace_mismatch`, `unavailable`) failures have no path keys. Cancellation returns an executor error.
 
 ## Catalog policies
 
