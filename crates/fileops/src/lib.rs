@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::sync::Arc;
 mod atomic;
 pub mod edit;
+pub mod file_move;
 pub mod list;
 mod operations;
 mod options;
