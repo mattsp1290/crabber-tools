@@ -6,8 +6,10 @@ use serde_json::Value;
 use std::sync::Arc;
 mod atomic;
 pub mod edit;
+pub mod file_delete;
 pub mod file_move;
 pub mod list;
+pub mod multi_edit;
 mod operations;
 mod options;
 pub mod read;
@@ -28,12 +30,17 @@ pub const MAX_LIST_ENTRIES: usize = 5000;
 pub const NEW_FILE_MODE: u32 = 0o644;
 /// Atomic-write siblings; a host crash may leave one behind.
 pub const TEMP_PREFIX: &str = ".crabber-tools-tmp-";
+/// Maximum edits in one atomic multi-edit request.
+pub const MAX_MULTI_EDITS: usize = 64;
 #[derive(Clone, Copy)]
 enum Kind {
     Read,
     Write,
     Edit,
     List,
+    MultiEdit,
+    Delete,
+    Move,
 }
 struct FileTool {
     options: Arc<Options>,
@@ -50,17 +57,18 @@ impl ToolExecutor for FileTool {
         args: Value,
     ) -> Result<Value, ExtensionError> {
         self.invoke(ctx, args).await.map(|mut value| {
-            let extra = match self.kind {
-                Kind::List => Some(("entries", serde_json::json!([]))),
-                Kind::Edit => Some(("anchor_occurrences", serde_json::json!(0))),
-                _ => None,
+            let extras: &[(&str, Value)] = match self.kind {
+                Kind::List => &[("entries", serde_json::json!([]))],
+                Kind::Edit => &[("anchor_occurrences", serde_json::json!(0))],
+                Kind::MultiEdit => &[("edits_applied", serde_json::json!(0))],
+                _ => &[],
             };
-            if let Some((key, default)) = extra {
+            for (key, default) in extras {
                 value
                     .as_object_mut()
                     .expect("envelope object")
-                    .entry(key)
-                    .or_insert(default);
+                    .entry(*key)
+                    .or_insert_with(|| default.clone());
             }
             value
         })
@@ -82,14 +90,16 @@ impl FileTool {
         }
         let lock = RootLock::for_root(&self.options.root);
         let guards = match self.kind {
-            Kind::Write | Kind::Edit => acquire_mutating(
-                &lock,
-                &self.options.capacity,
-                &self.options.limits,
-                &ctx.cancel,
-            )
-            .await
-            .map(|(g, p)| (Some(g), p)),
+            Kind::Write | Kind::Edit | Kind::MultiEdit | Kind::Delete | Kind::Move => {
+                acquire_mutating(
+                    &lock,
+                    &self.options.capacity,
+                    &self.options.limits,
+                    &ctx.cancel,
+                )
+                .await
+                .map(|(g, p)| (Some(g), p))
+            }
             _ => acquire_read(&self.options.capacity, &self.options.limits, &ctx.cancel)
                 .await
                 .map(|p| (None, p)),

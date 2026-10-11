@@ -25,10 +25,16 @@ pub enum ToolId {
     TrackerWrite,
     /// Ask the host's user a question or report a pending question.
     UserInteract,
+    /// Apply ordered edits in one atomic write.
+    MultiEdit,
+    /// Delete one regular file.
+    FileDelete,
+    /// Move one regular file without overwriting a destination.
+    FileMove,
 }
 impl ToolId {
     /// Deterministic registration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
         Self::FileRead,
         Self::FileWrite,
         Self::FileEdit,
@@ -40,6 +46,9 @@ impl ToolId {
         Self::UrlFetch,
         Self::TrackerWrite,
         Self::UserInteract,
+        Self::MultiEdit,
+        Self::FileDelete,
+        Self::FileMove,
     ];
     /// The eleven tools in eino-tools `catalog.Standard` at the pinned revision,
     /// compared against `fixtures/eino-tools/catalog.json`.
@@ -56,6 +65,8 @@ impl ToolId {
         Self::TrackerWrite,
         Self::UserInteract,
     ];
+    /// Tools beyond the eleven-tool upstream parity set.
+    pub const BEYOND_PARITY: [Self; 3] = [Self::MultiEdit, Self::FileDelete, Self::FileMove];
     /// Stable catalog id.
     pub const fn id(self) -> &'static str {
         match self {
@@ -70,6 +81,9 @@ impl ToolId {
             Self::UrlFetch => "standard.url-fetch",
             Self::TrackerWrite => "standard.tracker-write",
             Self::UserInteract => "standard.user-interact",
+            Self::MultiEdit => "standard.multi-edit",
+            Self::FileDelete => "standard.file-delete",
+            Self::FileMove => "standard.file-move",
         }
     }
     /// Model-facing tool name.
@@ -86,6 +100,9 @@ impl ToolId {
             Self::UrlFetch => "url_fetch",
             Self::TrackerWrite => "tracker_write",
             Self::UserInteract => "user_interact",
+            Self::MultiEdit => "multi_edit",
+            Self::FileDelete => "file_delete",
+            Self::FileMove => "file_move",
         }
     }
     /// Whether repeating the tool has no intentional writes.
@@ -99,7 +116,13 @@ impl ToolId {
     pub const fn mutating(self) -> bool {
         matches!(
             self,
-            Self::FileWrite | Self::FileEdit | Self::Shell | Self::ApplyPatch
+            Self::FileWrite
+                | Self::FileEdit
+                | Self::Shell
+                | Self::ApplyPatch
+                | Self::MultiEdit
+                | Self::FileDelete
+                | Self::FileMove
         )
     }
 }
