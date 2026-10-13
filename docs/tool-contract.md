@@ -16,8 +16,8 @@ Every persisted session directory must be absent or an absolute canonical match;
 the default AgentConfig directory `.` fails with `workspace_mismatch`. Reopen
 WorkspaceRoot after replacing the directory at the same path. Relative in-root
 symlinks work; absolute targets (even in-root) and escaping targets fail with
-`path_escape`. Parent traversal is rejected syntactically. Hard links are a host
-concern. Filesystem operations run as the host uid and preserve mode on atomic
+`path_escape`. Parent traversal is rejected syntactically. Existing hard links are a host concern; file_move creates a transient second link
+during a move. Filesystem operations run as the host uid and preserve mode on atomic
 writes; new files use 0644. Ownership is copied when the host is root or the
 desired owner is the host uid; an attempted chown failure returns `io`. Other
 unprivileged replacements keep the new file’s host ownership. A crash may leave a `.crabber-tools-tmp-*`
@@ -31,7 +31,7 @@ whole process group on future drop. Timeouts allow five seconds for reaping;
 leader exit allows five seconds for inherited pipes. Detached descendants or
 children that close their pipes are not tracked; hosts own their lifecycle.
 
-Workspace writers (write, edit, shell and apply_patch) share a process-global lock
+Workspace writers (write, edit, multi_edit, file_delete, file_move, shell and apply_patch) share a process-global lock
 keyed by canonical root. Read, list, search, glob and URL fetch take capacity only
 and are unordered against writes. Tracker mutations use backend hub locking and
 take shared capacity without the workspace writer lock. `user_interact` takes
@@ -677,11 +677,136 @@ answer precedence, control checks, byte/wait bounds, prompt capacity and absence
 of a model-facing `canceled` category differ from upstream. Categories are
 `validation`, `too_large`, `io`, `timeout`, `unavailable`, `unknown`.
 
+## multi_edit
+
+Id: `standard.multi-edit`. Retry safe: false. Required permission: `workspace.fs.write`.
+
+Apply several anchored substring replacements to one workspace-relative file in a single atomic write. Edits apply in order against the running result; each anchor must occur exactly once at its turn. If any edit fails, nothing is written and the failing edit index is reported.
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path",
+    "edits"
+  ],
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workspace-relative file to edit. Must exist."
+    },
+    "edits": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "anchor",
+          "replacement"
+        ],
+        "properties": {
+          "anchor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Literal substring to find. Must match exactly once when this edit runs. No regex."
+          },
+          "replacement": {
+            "type": "string",
+            "description": "Substitute for the anchor. May be empty."
+          }
+        }
+      },
+      "description": "Ordered edits. Later edits see earlier replacements."
+    }
+  }
+}
+```
+
+Edits apply in order to the running result. Each literal anchor must occur exactly once at its turn. The file, each anchor and replacement, and every intermediate result are capped at 256 KiB. There must be 1–64 edits and every anchor must be nonempty. An in-root final symlink is followed; the target is edited atomically and the symlink remains. The host pre_write hook runs immediately before the single atomic write. Any failed edit leaves the file unchanged.
+
+Success keys: `outcome`, `path`, `bytes_written`, `edits_applied`. Every failure has `outcome`, `error`, `edits_applied: 0`. Parse (`validation`, `too_large`, syntactic `path_escape`) and pre-run (`workspace_mismatch`, `unavailable`) failures have no `path`. Run failures (`path_escape`, `not_found`, `is_directory`, `binary`, `too_large`, `io`, and filesystem `not_directory`) include `path`. Anchor failures add `edit_index` (zero-based) and `anchor_occurrences`; category is `anchor_not_found` or `anchor_ambiguous`.
+
+## file_delete
+
+Id: `standard.file-delete`. Retry safe: false. Required permission: `workspace.fs.write`.
+
+Delete one workspace-relative regular file. Directories, symlinks and missing files are rejected with structured errors (is_directory, validation, not_found). Not idempotent: deleting a missing file fails.
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path"
+  ],
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workspace-relative file to delete."
+    }
+  }
+}
+```
+
+Deletes one regular file; never follows a final-component symlink. Root or a directory fails `is_directory`; a symlink or non-regular file fails `validation`; a missing file fails `not_found`. Escaping symlink parents fail `path_escape`. Other filesystem errors map to `io` or `not_directory`.
+
+Success keys: `outcome`, `path`. Failure keys: `outcome`, `error`; run-stage failures also include `path`. Parse/pre-run failures have no `path` (`validation`, `workspace_mismatch`, `unavailable`). Cancellation returns an executor error.
+
+## file_move
+
+Id: `standard.file-move`. Retry safe: false. Required permission: `workspace.fs.write`.
+
+Move or rename one workspace-relative regular file to a new workspace-relative path that does not exist yet. Optional create_dirs=true creates the destination parent chain. The file keeps its mode and ownership. Fails with conflict if the destination exists.
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path",
+    "new_path"
+  ],
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workspace-relative source file. Must be a regular file."
+    },
+    "new_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workspace-relative destination. Must not exist."
+    },
+    "create_dirs": {
+      "type": "boolean",
+      "description": "If true, mkdir -p the destination parent chain. Default false."
+    }
+  }
+}
+```
+
+Uses a capability-directory hard link followed by source removal; inode, mode and ownership survive, including read-only sources and sources with existing hard links. The source must be a regular file: a final symlink is `validation`, directory/root is `is_directory`, missing is `not_found`. Both paths must be relative, different after normalization, and destination must not be root. Any existing destination, including a symlink or directory, is `conflict`. Case-only renames on case-insensitive filesystems also report `conflict`. Escaping parents fail `path_escape`; other filesystem errors include `not_directory` and `io`.
+
+`create_dirs: true` creates destination parents; these directories remain after later failure. Without it, missing parents fail `not_found`. A destination appearing during the move fails `conflict` without being overwritten. The linked name is checked to reject a source raced into a symlink. The host pre_write hook fires between link and unlink; an already running blocking move finishes with its guards held after Agent interruption.
+
+If the host pre_write hook panics, the destination is rolled back and the result is `failed/unknown` with `path` and `new_path`. If that cleanup also fails, `partial: true` reports that both names may remain. Panic payloads are never returned.
+
+If source removal fails, the destination is removed to roll back: `io` with message "move could not remove source", no `partial`. If rollback also fails: `io` with message "move installed destination but could not remove source" and `partial: true`; both names may remain. Retrying then reports `conflict`; inspect with `file_list`. A host crash in the two-name window can also leave both names, without a returned `partial` result.
+
+No cross-filesystem copy fallback. `EXDEV` maps to `io` with "destination is on a different filesystem". Filesystems without hard links, protected_hardlinks restrictions for a source not owned by the host uid, and link-count limits map to `io` with "filesystem refused the link". For either message use `apply_patch` move (content rewrite), or `file_read` plus `file_write` plus `file_delete`.
+
+Success keys: `outcome`, `path`, `new_path`. Failure keys: `outcome`, `error`; all run-stage failures also include `path`, `new_path`, with `partial: true` only for rollback failure after source removal failure or host-hook panic. Parse (`validation`, `path_escape`) and pre-run (`workspace_mismatch`, `unavailable`) failures have no path keys. Cancellation returns an executor error.
+
 ## Catalog policies
 
-`ToolId::ALL` and `EnabledSet::all()` include eleven tools: the original six
+`ToolId::ALL` and `EnabledSet::all()` include fourteen tools: the original six
 (file_read, file_write, file_edit, file_list, search, shell), then glob,
-apply_patch, url_fetch, tracker_write and user_interact. `ToolId::EINO_PARITY`
+apply_patch, url_fetch, tracker_write, user_interact, multi_edit, file_delete and file_move. `ToolId::EINO_PARITY`
 is the explicit eleven-tool upstream set; `EnabledSet::eino_parity()` selects it.
 `Options::url_fetch`, `Options::tracker` and `Options::user_interact` are optional
 only for disabled tools; an enabled tool without its policy is a Plan construction
@@ -691,8 +816,10 @@ identity, including routing, workflow, environment, prompt surface and bounds.
 Metadata remains root-free and deterministic. The prelude re-exports
 `UrlFetchPolicy`, `HostPattern`, `TrackerPolicy`, `UserInteractPolicy`, `Surface`.
 
-Writer serialization applies to file_write, file_edit, shell and apply_patch.
+Writer serialization applies to file_write, file_edit, multi_edit, file_delete, file_move, shell and apply_patch.
 Glob and URL fetch are readers. Tracker writes use backend hub synchronization.
 Every registered tool uses the same mount Capacity, including tracker and URL
 operations, except `user_interact`, which has none. Hosts can retain a six-tool
 subset with all three optional policies `None`.
+
+`EnabledSet::all()` includes destructive `file_delete` and `file_move`; hosts can subtract `ToolId::BEYOND_PARITY` or select `EnabledSet::eino_parity()`.

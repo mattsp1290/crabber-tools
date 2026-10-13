@@ -38,6 +38,8 @@ impl ToolError {
 }
 /// Stable error category vocabulary.
 pub mod category {
+    /// The `conflict` failure category.
+    pub const CONFLICT: &str = "conflict";
     /// The `validation` failure category.
     pub const VALIDATION: &str = "validation";
     /// The `path_escape` failure category.

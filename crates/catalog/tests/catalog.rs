@@ -79,7 +79,13 @@ fn metadata_parity_docs_hashes_and_prelude() {
             id.mutating(),
             matches!(
                 id,
-                ToolId::FileWrite | ToolId::FileEdit | ToolId::Shell | ToolId::ApplyPatch
+                ToolId::FileWrite
+                    | ToolId::FileEdit
+                    | ToolId::Shell
+                    | ToolId::ApplyPatch
+                    | ToolId::MultiEdit
+                    | ToolId::FileDelete
+                    | ToolId::FileMove
             )
         );
         let dir = if ToolId::EINO_PARITY.contains(&id) {

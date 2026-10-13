@@ -2,7 +2,7 @@
 
 Workspace coding tools for Crabber, mirroring eino-tools: `file_read`, `file_write`,
 `file_edit`, `file_list`, `search`, `shell`, `glob`, `apply_patch`, `url_fetch`,
-`tracker_write`, and `user_interact`. One catalog extension mounts a
+`tracker_write`, `user_interact`, `multi_edit`, `file_delete`, and `file_move`. One catalog extension mounts a
 host-chosen subset with bounded work, capability-rooted file access, and process
 group cleanup on cancellation. Unix only; Rust 2024, toolchain 1.99.0.
 
@@ -71,7 +71,7 @@ and checks persisted results.
 | Crate | Responsibility |
 | --- | --- |
 | crabber-tools-core | Envelopes, capabilities, bounds, locks, process policy and identities |
-| crabber-tools-fileops | Reads, atomic writes, anchored edits and directory listings |
+| crabber-tools-fileops | Reads, atomic writes, ordered anchored edits, listings, deletion and inode-preserving moves |
 | crabber-tools-search | Bounded streaming ripgrep JSON search; requires rg >=14 |
 | crabber-tools-shell | Explicit login/non-login shell policy, bounded output and timeouts |
 | crabber-tools-glob | Sorted capability-confined path discovery |
@@ -93,9 +93,10 @@ when mounting other tools, because restrictions apply to the entire run.
 Use one global root per agent, or Scope::Session for a shared agent. Multiple
 roots mounted globally collide on names. The persisted directory must match the
 admitted absolute root; AgentConfig's default `.` is rejected. Reopen the root
-handle after deleting and recreating a directory. Hard links and detached
-processes remain host concerns. Reads are unordered against in-flight writers.
-Started blocking writes may complete after interruption, always atomically.
+handle after deleting and recreating a directory. Existing hard links and detached processes remain host concerns;
+`file_move` creates a transient second link during a move. Reads are unordered against in-flight writers.
+Started atomic writes may complete after interruption. A started `file_move` may
+also finish; a host crash between link and unlink can leave both names.
 
 See [the parity map](docs/parity.md) and [the tool contract](docs/tool-contract.md) for exact schemas, envelopes,
 limits, identity inputs, accepted search path races, and deliberate deviations.
@@ -119,9 +120,12 @@ substitutes the candidate SHA in both manifest and lockfile before `--locked`.
 The first deliverable for request `crabber-r-5fxy` is tagged `v0.1.0` at
 `3abb69425ed2d3beda740b0896cd0c59e90bdc81`. Version `0.2.0` reaches eino-tools parity: eleven tools, verified against upstream
 fixtures at eino-tools `c0975d6764b2536faf639efe516a79de6154a55d`; the owner tags
-`v0.2.0` after merge.
+`v0.2.0` after merge. Version `0.3.0` adds `multi_edit`, `file_delete` and
+`file_move` beyond parity.
 
-`EnabledSet::all()` includes all eleven tools. Enabling `UrlFetch` requires
+`EnabledSet::all()` includes all fourteen tools, including destructive `file_delete` and `file_move`.
+Hosts wanting upstream-shaped tools use `EnabledSet::eino_parity()` or subtract
+`ToolId::BEYOND_PARITY`. Enabling `UrlFetch` requires
 `url_fetch: Some(UrlFetchPolicy::default())`; that policy denies private and
 special-purpose destinations by default and has an empty host allowlist.
 Enabling `TrackerWrite` requires `tracker: Some(TrackerPolicy { .. })` with an
@@ -139,10 +143,10 @@ must answer. `EnabledSet::eino_parity()` selects the eleven upstream tools and
 requires all three optional policies.
 
 The example mounts a workspace subset plus `user_interact` with a scripted
-prompter and leaves URL and tracker policies `None`; it requires no tracker installation or network. The all-parity-tools catalog
+prompter and leaves URL and tracker policies `None`; it requires no tracker installation or network. The all-tools catalog
 runtime test uses a synthetic bn backend and a confined file URL. Tracker writes
 mutate the hub and are not retry-safe, but do not take the workspace writer lock.
-All eleven tools share mount capacity except `user_interact`. Consumer `flows-guest` evidence and the owner's
+All fourteen tools share mount capacity except `user_interact`. Consumer `flows-guest` evidence and the owner's
 request-scope decision remain required before resolving the parent request.
 
 To materialize the standalone consumer outside this workspace, copy both the
