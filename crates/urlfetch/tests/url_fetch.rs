@@ -22,6 +22,8 @@ async fn call(o: &Arc<Options>, value: Value) -> Value {
         .execute_with_context(support::context(&o.root, CancellationToken::new()), value)
         .await
         .unwrap()
+        .json_value()
+        .unwrap()
 }
 fn file(path: &Path) -> String {
     url::Url::from_file_path(path).unwrap().to_string()

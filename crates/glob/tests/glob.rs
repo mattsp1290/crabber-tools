@@ -2,8 +2,7 @@
 #[path = "../../../test-support/mod.rs"]
 mod support;
 use crabber::{
-    Agent, FakeProvider, PermissionDecision, StaticPolicy,
-    core::{RunStatus, ToolCallStatus},
+    Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
     session::MemoryStore,
 };
 use crabber_tools_core::*;
@@ -25,6 +24,8 @@ async fn call(o: &Arc<Options>, args: Value) -> Value {
         .executor
         .execute_with_context(context(&o.root, CancellationToken::new()), args)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 #[tokio::test]
@@ -162,6 +163,7 @@ async fn capacity_and_agent_interruption() {
     );
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("glob", json!({"pattern":"**"})),
@@ -169,7 +171,7 @@ async fn capacity_and_agent_interruption() {
         ])))
         .config(config(temp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(definition(o.clone()))
+        .shared_tool(definition(o.clone()))
         .build()
         .unwrap();
     let run = agent.prompt(None, "discover").await.unwrap();
@@ -182,10 +184,10 @@ async fn capacity_and_agent_interruption() {
     .await
     .unwrap();
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     drop(held);
     assert_eq!(
@@ -327,7 +329,41 @@ async fn pathological_pattern_worker() {
                 serde_json::json!({"pattern":pattern}),
             )
             .await
+            .unwrap()
+            .json_value()
             .unwrap();
         assert_eq!(result["error"]["category"], "validation");
     }
+}
+
+#[tokio::test]
+async fn interrupted_large_walk_joins_owned_resources() {
+    let temp = tempfile::tempdir().unwrap();
+    for i in 0..20_000 {
+        std::fs::write(temp.path().join(format!("f{i:05}")), "").unwrap();
+    }
+    let options = options(temp.path());
+    let owner = crabber::extension::ToolResourceOwner::new();
+    let cancel = CancellationToken::new();
+    let context = context(&options.root, cancel.clone()).with_resources(owner.resources());
+    let tool = definition(options);
+    let worker = tokio::spawn(async move {
+        tool.executor
+            .execute_with_context(context, json!({"pattern":"**"}))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while owner.snapshot().pending == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cancel.cancel();
+    let _ = worker.await.unwrap();
+    let report = owner.drain(std::time::Duration::from_secs(2)).await;
+    assert!(report.sealed);
+    assert_eq!(report.pending, 0);
+    assert!(report.joined >= 1);
+    assert!(report.failures.is_empty());
 }

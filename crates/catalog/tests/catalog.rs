@@ -5,7 +5,6 @@ mod probe;
 mod support;
 use crabber::{
     Agent, ExtensionError, FakeProvider, PermissionDecision, StaticPolicy, ToolDefinition,
-    ToolExecutor,
     core::{ToolCallStatus, ToolInfo},
     extension::{Extension, Scope},
     session::MemoryStore,
@@ -14,9 +13,8 @@ use crabber_tools_catalog::prelude::*;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use support::*;
-fn options(path: &std::path::Path) -> Options {
-    Options {
-        root: WorkspaceRoot::open(path).unwrap(),
+fn options(_path: &std::path::Path) -> Policies {
+    Policies {
         enabled: EnabledSet::only([
             ToolId::FileRead,
             ToolId::FileWrite,
@@ -142,14 +140,20 @@ fn metadata_parity_docs_hashes_and_prelude() {
 fn hashes_cover_policies_root_enabled_and_restrictions() {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
-    let hash = StandardTools::new(options(a.path())).unwrap().config_hash();
+    let hash = StandardTools::new(WorkspaceRoot::open(a.path()).unwrap(), options(a.path()))
+        .unwrap()
+        .config_hash();
     assert_eq!(
         hash,
-        StandardTools::new(options(a.path())).unwrap().config_hash()
+        StandardTools::new(WorkspaceRoot::open(a.path()).unwrap(), options(a.path()))
+            .unwrap()
+            .config_hash()
     );
     assert_ne!(
         hash,
-        StandardTools::new(options(b.path())).unwrap().config_hash()
+        StandardTools::new(WorkspaceRoot::open(b.path()).unwrap(), options(b.path()))
+            .unwrap()
+            .config_hash()
     );
     for change in 0..4 {
         let mut o = options(a.path());
@@ -159,15 +163,20 @@ fn hashes_cover_policies_root_enabled_and_restrictions() {
             2 => o.restrict_to_enabled = true,
             _ => o.enabled = EnabledSet::only([ToolId::FileRead]),
         };
-        assert_ne!(hash, StandardTools::new(o).unwrap().config_hash());
+        assert_ne!(
+            hash,
+            StandardTools::new(WorkspaceRoot::open(a.path()).unwrap(), o)
+                .unwrap()
+                .config_hash()
+        );
     }
     let mut o = options(a.path());
     o.enabled = EnabledSet::only([]);
-    assert!(StandardTools::new(o).is_err());
+    assert!(StandardTools::new(WorkspaceRoot::open(a.path()).unwrap(), o).is_err());
 }
 struct Host;
 #[async_trait::async_trait]
-impl ToolExecutor for Host {
+impl crabber::JsonToolExecutor for Host {
     async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
         Ok(json!({"host":true}))
     }
@@ -191,10 +200,11 @@ async fn allowlist_and_run_wide_restriction() {
         let mut o = options(tmp.path());
         o.enabled = EnabledSet::only([ToolId::FileRead]);
         o.restrict_to_enabled = restrict;
-        let tools = StandardTools::new(o).unwrap();
+        let tools = StandardTools::new(WorkspaceRoot::open(tmp.path()).unwrap(), o).unwrap();
         assert_eq!(tools.definitions().len(), 1);
         let store = Arc::new(MemoryStore::new());
         let agent = Agent::builder()
+            .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
             .store(store.clone())
             .provider(Arc::new(FakeProvider::scripted(vec![
                 turn("shell", json!({"cmd":"true"})),
@@ -203,8 +213,8 @@ async fn allowlist_and_run_wide_restriction() {
             ])))
             .config(config(tmp.path()))
             .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-            .extension(Arc::new(tools), Scope::Global)
-            .tool(host())
+            .shared_extension(Arc::new(tools), Scope::Global)
+            .shared_tool(host())
             .build()
             .unwrap();
         let run = agent.prompt(None, "allowlist").await.unwrap();
@@ -228,15 +238,22 @@ async fn collision_propagates() {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .memory()
         .provider(Arc::new(FakeProvider::scripted(vec![done()])))
         .config(config(a.path()))
-        .extension(
-            Arc::new(StandardTools::new(options(a.path())).unwrap()),
+        .shared_extension(
+            Arc::new(
+                StandardTools::new(WorkspaceRoot::open(a.path()).unwrap(), options(a.path()))
+                    .unwrap(),
+            ),
             Scope::Global,
         )
-        .extension(
-            Arc::new(StandardTools::new(options(b.path())).unwrap()),
+        .shared_extension(
+            Arc::new(
+                StandardTools::new(WorkspaceRoot::open(b.path()).unwrap(), options(b.path()))
+                    .unwrap(),
+            ),
             Scope::Global,
         )
         .build()
@@ -248,7 +265,10 @@ async fn collision_propagates() {
         },
         Err(e) => e,
     };
-    assert!(error.to_string().contains("tool name collision"), "{error}");
+    assert!(
+        error.to_string().contains("context initialization failed"),
+        "{error}"
+    );
     agent.close_extensions().await.unwrap();
 }
 #[tokio::test]
@@ -256,6 +276,7 @@ async fn all_six_tools_execute_and_probe() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("file_write", json!({"path":"x","content":"hello"})),
@@ -271,8 +292,14 @@ async fn all_six_tools_execute_and_probe() {
         ])))
         .config(config(tmp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .extension(
-            Arc::new(StandardTools::new(options(tmp.path())).unwrap()),
+        .shared_extension(
+            Arc::new(
+                StandardTools::new(
+                    WorkspaceRoot::open(tmp.path()).unwrap(),
+                    options(tmp.path()),
+                )
+                .unwrap(),
+            ),
             Scope::Global,
         )
         .build()
@@ -387,4 +414,11 @@ fn parity_docs_cover_allowed_diffs_and_inventory() {
     ] {
         assert!(matrix.contains(&format!("### {stem}\n")));
     }
+}
+
+#[path = "../../../examples/mount-standard/src/contexts.rs"]
+mod contexts;
+#[tokio::test]
+async fn contextual_host_probe() {
+    contexts::run().await.unwrap();
 }

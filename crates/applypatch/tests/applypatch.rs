@@ -25,6 +25,8 @@ async fn call(o: &Arc<Options>, patch: &str) -> Value {
         )
         .await
         .unwrap()
+        .json_value()
+        .unwrap()
 }
 #[derive(Deserialize)]
 struct Case {
@@ -232,6 +234,8 @@ async fn validation_binary_and_alias_overlap_fail_before_writes() {
             d.executor
                 .execute_with_context(context(&o.root, CancellationToken::new()), args)
                 .await
+                .unwrap()
+                .json_value()
                 .unwrap()["error"]["category"],
             "validation"
         );
@@ -273,8 +277,7 @@ async fn source_and_aggregate_content_caps_prevent_writes() {
 #[tokio::test]
 async fn interruption_and_permission_denial_prevent_effects() {
     use crabber::{
-        Agent, FakeProvider, PermissionDecision, StaticPolicy,
-        core::{RunStatus, ToolCallStatus},
+        Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
         session::MemoryStore,
     };
     let temp = tempfile::tempdir().unwrap();
@@ -294,6 +297,7 @@ async fn interruption_and_permission_denial_prevent_effects() {
         .unwrap();
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("apply_patch", json!({"patch_text":patch})),
@@ -301,7 +305,7 @@ async fn interruption_and_permission_denial_prevent_effects() {
         ])))
         .config(config(temp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(definition(o.clone()))
+        .shared_tool(definition(o.clone()))
         .build()
         .unwrap();
     let run = agent.prompt(None, "patch").await.unwrap();
@@ -314,22 +318,23 @@ async fn interruption_and_permission_denial_prevent_effects() {
     .await
     .unwrap();
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     assert!(!temp.path().join("never").exists());
     drop(held);
     agent.close_extensions().await.unwrap();
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("apply_patch", json!({"patch_text":patch})),
             done(),
         ])))
         .config(config(temp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Deny)))
-        .tool(definition(o))
+        .shared_tool(definition(o))
         .build()
         .unwrap();
     agent
@@ -395,6 +400,8 @@ async fn repetitive_near_match_is_preflighted_without_effects() {
     )
     .await
     .unwrap()
+    .unwrap()
+    .json_value()
     .unwrap();
     assert_eq!(result["error"]["category"], "conflict");
     assert_eq!(result["partial"], false);

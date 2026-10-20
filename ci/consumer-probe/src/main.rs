@@ -1,34 +1,52 @@
-//! Standalone consumer graph: catalog + command guard + host-owned tools.
+//! Git-only tools consumer with a custom extension and custom host tool.
+mod contexts;
+mod matrix;
 mod probe;
-use crabber_extensions::command_guard::{CommandGuard, Limits, Options, Rule, default_bindings};
+use async_trait::async_trait;
+use crabber::{
+    ExtensionError, ToolDefinition,
+    core::ToolInfo,
+    extension::{Extension, Registrar},
+};
+use serde_json::{Value, json};
 use std::sync::Arc;
+struct Marker;
+#[async_trait]
+impl crabber::JsonToolExecutor for Marker {
+    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
+        Ok(json!({"marker":true}))
+    }
+}
+#[async_trait]
+impl Extension for Marker {
+    fn id(&self) -> &str {
+        "consumer/marker"
+    }
+    fn version(&self) -> &str {
+        "1"
+    }
+    fn config_hash(&self) -> String {
+        "consumer-marker-v1".into()
+    }
+    async fn install(&self, r: &mut Registrar) -> Result<(), ExtensionError> {
+        r.tool(Arc::new(ToolDefinition {
+            info: ToolInfo {
+                name: "consumer_marker".into(),
+                description: "Synthetic consumer marker".into(),
+                parameters: json!({"type":"object","properties":{},"additionalProperties":false}),
+                retry_safe: true,
+                required_permissions: vec![],
+            },
+            executor: Arc::new(Marker),
+        }));
+        Ok(())
+    }
+}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let guard = CommandGuard::new(Options {
-        bindings: default_bindings(),
-        rules: vec![Rule {
-            id: "deny-push".into(),
-            executable: "git".into(),
-            arg_prefix: vec!["push".into()],
-        }],
-        limits: Limits {
-            max_bindings: 8,
-            max_rules: 8,
-            max_rule_bytes: 4096,
-            max_prefix_args: 16,
-            max_json_depth: 16,
-            max_json_nodes: 1024,
-            max_command_bytes: 16384,
-            max_analysis_bytes: 65536,
-            max_ast_nodes: 4096,
-            max_ast_depth: 16,
-            max_words: 2048,
-            max_word_bytes: 16384,
-            max_wrapper_depth: 16,
-            max_in_flight: 4,
-        },
-    })?;
-    probe::run(false, Some(Arc::new(guard))).await?;
+    probe::run(false, Some(Arc::new(Marker))).await?;
     probe::run(true, None).await?;
+    contexts::run().await?;
+    matrix::run().await?;
     Ok(())
 }

@@ -30,6 +30,8 @@ async fn call(options: Options, args: Value) -> Value {
         .execute_with_context(context(&root, CancellationToken::new()), args)
         .await
         .unwrap()
+        .json_value()
+        .unwrap()
 }
 #[tokio::test]
 async fn behavior_caps_validation_and_runtime() {
@@ -144,13 +146,13 @@ async fn environment_and_policy_construction() {
 #[tokio::test]
 async fn runtime_interrupt_kills_group_and_permission_denies_effect() {
     use crabber::{
-        Agent, FakeProvider, PermissionDecision, StaticPolicy,
-        core::{RunStatus, ToolCallStatus},
+        Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
         session::MemoryStore,
     };
     let tmp = tempfile::tempdir().unwrap();
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn(
@@ -161,23 +163,36 @@ async fn runtime_interrupt_kills_group_and_permission_denies_effect() {
         ])))
         .config(config(tmp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(definition(Arc::new(options(tmp.path()))).unwrap())
+        .shared_tool(definition(Arc::new(options(tmp.path()))).unwrap())
         .build()
         .unwrap();
     let run = agent.prompt(None, "interrupt").await.unwrap();
     let session = run.session_id().clone();
     wait_file(&tmp.path().join("child")).await;
+    let interrupted_run = run.run_id().clone();
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
+    let drain = agent.drain_execution_tasks(Duration::from_secs(2)).await;
+    let resources = drain
+        .resources
+        .iter()
+        .find(|r| r.run_id == interrupted_run)
+        .expect("interrupted call resource report");
+    assert!(resources.resources.sealed);
+    assert!(resources.resources.joined >= 1);
+    assert_eq!(resources.resources.pending, 0);
+    assert!(resources.resources.failures.is_empty());
+
     assert_gone(pid(&tmp.path().join("leader"))).await;
     assert_gone(pid(&tmp.path().join("child"))).await;
     assert_eq!(
         calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     agent.close_extensions().await.unwrap();
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("shell", json!({"cmd":"touch canary"})),
@@ -188,7 +203,7 @@ async fn runtime_interrupt_kills_group_and_permission_denies_effect() {
             StaticPolicy::new(PermissionDecision::Allow)
                 .with_rule("shell", PermissionDecision::Deny),
         ))
-        .tool(definition(Arc::new(options(tmp.path()))).unwrap())
+        .shared_tool(definition(Arc::new(options(tmp.path()))).unwrap())
         .build()
         .unwrap();
     let run = agent.prompt(None, "deny").await.unwrap();
@@ -288,4 +303,21 @@ async fn child_identity_and_detached_pipe_deadline() {
         assert_eq!(v["timed_out"], true);
         assert_gone(child).await;
     }
+}
+
+#[tokio::test]
+async fn control_heavy_output_fits_typed_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = options(dir.path());
+    options.policy.output_cap_bytes = 2 * 1024 * 1024;
+    let value = execute(
+        dir.path(),
+        definition(Arc::new(options)).unwrap(),
+        json!({"cmd":"head -c 2097152 /dev/zero | tr '\\000' '\\001'"}),
+    )
+    .await;
+    assert_eq!(value["outcome"], "succeeded");
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(value["stdout_truncated"], true);
+    assert!(serde_json::to_vec(&value).unwrap().len() <= 4 * 1024 * 1024);
 }

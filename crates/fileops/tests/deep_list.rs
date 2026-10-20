@@ -46,6 +46,8 @@ fn deep_listing_worker() {
             support::context(&root, CancellationToken::new()),
             json!({"recursive":true}),
         ))
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["outcome"], "succeeded");
     assert_eq!(result["entries"].as_array().unwrap().len(), 1500);

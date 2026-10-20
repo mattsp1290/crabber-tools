@@ -18,8 +18,8 @@ fn context(root: &WorkspaceRoot, cancel: CancellationToken) -> ToolContext {
         HostServices::default(),
         WorkspaceContext::from_persisted("test", root.path().to_str().unwrap()),
         Arc::new(|_| {}),
-        None,
     )
+    .with_resources(crabber::extension::ToolResourceOwner::new().resources())
 }
 fn options(root: &std::path::Path) -> Arc<Options> {
     let limits = Limits {
@@ -37,6 +37,8 @@ async fn call(tool: Arc<ToolDefinition>, options: &Options, args: Value) -> Valu
     tool.executor
         .execute_with_context(context(&options.root, CancellationToken::new()), args)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 fn keys(v: &Value) -> Vec<&str> {
@@ -267,6 +269,8 @@ async fn failure_envelope_keys_and_lifecycle() {
                 args(i, "x"),
             )
             .await
+            .unwrap()
+            .json_value()
             .unwrap();
         assert_eq!(v["error"]["category"], "workspace_mismatch");
         assert_eq!(keys(&v), early);
@@ -331,8 +335,7 @@ fn independent_metadata_goldens() {
 #[path = "../../../test-support/mod.rs"]
 mod support;
 use crabber::{
-    Agent, FakeProvider, PermissionDecision, StaticPolicy,
-    core::{RunStatus, ToolCallStatus},
+    Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
     session::MemoryStore,
 };
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -354,6 +357,7 @@ async fn interrupted_move_leaves_one_name() {
     Arc::get_mut(&mut o).unwrap().pre_write = Some(hook);
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             support::turn("file_move", json!({"path":"source","new_path":"target"})),
@@ -361,7 +365,7 @@ async fn interrupted_move_leaves_one_name() {
         ])))
         .config(support::config(temp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(fileops::file_move::definition(o.clone()))
+        .shared_tool(fileops::file_move::definition(o.clone()))
         .build()
         .unwrap();
     let run = agent.prompt(None, "move").await.unwrap();
@@ -370,10 +374,10 @@ async fn interrupted_move_leaves_one_name() {
         .await
         .unwrap();
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         support::calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     assert!(temp.path().join("target").exists());
     assert!(temp.path().join("source").exists());

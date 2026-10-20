@@ -82,14 +82,14 @@ pub fn definition(options: Arc<Options>) -> Result<Arc<ToolDefinition>, Extensio
 struct ShellTool(Arc<Options>);
 #[async_trait]
 impl ToolExecutor for ShellTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(failed(category::VALIDATION, "context required"))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         value: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
         let start = tokio::time::Instant::now();
         self.invoke(ctx, value).await.map(|mut value| {
             for (key, default) in [
@@ -104,7 +104,7 @@ impl ToolExecutor for ShellTool {
                     .or_insert(default);
             }
             value["duration_ms"] = serde_json::json!(start.elapsed().as_millis() as u64);
-            value
+            crabber_tools_core::to_output(value, &["stdout", "stderr"])
         })
     }
 }
@@ -123,7 +123,7 @@ impl ShellTool {
             return Ok(e.value());
         }
         let lock = RootLock::for_root(&self.0.root);
-        let _guards = match acquire_mutating(&lock, &self.0.capacity, &self.0.limits, &ctx.cancel)
+        let guards = match acquire_mutating(&lock, &self.0.capacity, &self.0.limits, &ctx.cancel)
             .await
         {
             Ok(g) => g,
@@ -134,7 +134,7 @@ impl ShellTool {
         };
         tokio::select! {biased;
             _=ctx.cancel.cancelled()=>Err(ExtensionError::Tool("cancelled".into())),
-            result=run::run(&self.0,args)=>Ok(result),
+            result=run::run(&self.0,args,&ctx,guards)=>Ok(result),
         }
     }
 }

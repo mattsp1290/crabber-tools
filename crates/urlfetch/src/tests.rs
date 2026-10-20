@@ -332,6 +332,8 @@ async fn total_timeout_includes_dns_and_releases_capacity() {
             json!({"url":"https://example.com/"}),
         )
         .await
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["error"]["category"], "timeout");
     assert_eq!(TIMEOUT, Duration::from_secs(30));
@@ -460,6 +462,8 @@ async fn response_body_and_delayed_redirect_share_total_deadline() {
                 json!({"url":"https://example.com/"}),
             )
             .await
+            .unwrap()
+            .json_value()
             .unwrap();
         assert_eq!(result["error"]["category"], "timeout");
         assert_eq!(start.elapsed(), TIMEOUT);

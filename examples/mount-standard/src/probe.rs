@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use crabber::{
     Agent, AgentConfig, ExtensionError, FakeProvider, PermissionDecision, Selection, StaticPolicy,
-    StreamDelta, ToolDefinition, ToolExecutor,
+    StreamDelta, ToolDefinition,
     core::{ContentBlock, EventKind, ToolCallId, ToolCallStatus, ToolInfo},
     extension::{Extension, Registrar, Scope},
     session::{MemoryStore, SnapshotLimits, SnapshotOutcome, SnapshotRequest, Store},
@@ -28,16 +28,9 @@ fn turn(name: &str, args: Value) -> Vec<StreamDelta> {
         StreamDelta::Completed,
     ]
 }
-struct ScriptedPrompter;
-#[async_trait]
-impl crabber::extension::UserPrompter for ScriptedPrompter {
-    async fn ask(&self, _: &str) -> Result<String, String> {
-        Ok("yes".into())
-    }
-}
 struct Record(Arc<Mutex<Vec<Value>>>);
 #[async_trait]
-impl ToolExecutor for Record {
+impl crabber::JsonToolExecutor for Record {
     async fn execute(&self, args: Value) -> Result<Value, ExtensionError> {
         self.0.lock().unwrap().push(args);
         Ok(json!({"recorded":true}))
@@ -73,7 +66,7 @@ impl Extension for HostExtension {
     }
 }
 /// Mount a per-node subset beside a host extension and a plain host tool.
-/// Optionally add a real external extension (the consumer-probe uses CommandGuard).
+/// Optionally add a consumer extension registering consumer_marker.
 pub async fn run(
     deny_shell: bool,
     extra: Option<Arc<dyn Extension>>,
@@ -82,42 +75,37 @@ pub async fn run(
     std::fs::write(temp.path().join("README.md"), "known-line\n")?;
     std::fs::write(temp.path().join("AGENTS.md"), "Use the standard tools.\n")?;
     let root = WorkspaceRoot::open(temp.path())?;
-    let tools = StandardTools::new(Options {
-        root: root.clone(),
-        enabled: EnabledSet::only([
-            ToolId::FileRead,
-            ToolId::FileWrite,
-            ToolId::FileEdit,
-            ToolId::Search,
-            ToolId::Shell,
-            ToolId::UserInteract,
-        ]),
-        restrict_to_enabled: false,
-        shell: ShellPolicy {
-            shell_binary: "/bin/sh".into(),
-            startup_mode: StartupMode::NonLogin,
-            env: EnvPolicy::minimal_allowlist(),
-            run_as: None,
-            output_cap_bytes: 65536,
-        },
-        search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist())?,
-        url_fetch: None,
-        tracker: None,
-        user_interact: Some(UserInteractPolicy {
-            surface: Surface::Prompter {
-                identity: "example-scripted".into(),
-                prompter: Arc::new(ScriptedPrompter),
+    let tools = StandardTools::new(
+        root.clone(),
+        Policies {
+            enabled: EnabledSet::only([
+                ToolId::FileRead,
+                ToolId::FileWrite,
+                ToolId::FileEdit,
+                ToolId::Search,
+                ToolId::Shell,
+                ToolId::UserInteract,
+            ]),
+            restrict_to_enabled: false,
+            shell: ShellPolicy {
+                shell_binary: "/bin/sh".into(),
+                startup_mode: StartupMode::NonLogin,
+                env: EnvPolicy::minimal_allowlist(),
+                run_as: None,
+                output_cap_bytes: 65536,
             },
-            max_question_bytes: 65536,
-            max_answer_bytes: 65536,
-            max_wait: Duration::from_secs(5),
-            max_outstanding_prompts: 1,
-        }),
-        limits: Limits {
-            max_in_flight: 4,
-            max_blocking_wait: Duration::from_secs(2),
+            search: SearchPolicy::resolve_rg_from_path(EnvPolicy::minimal_allowlist())?,
+            url_fetch: None,
+            tracker: None,
+            user_interact: Some(UserInteractPolicy::durable(
+                crabber::core::AuthorityRequirement::new("example-operator", "1")?,
+            )),
+            limits: Limits {
+                max_in_flight: 4,
+                max_blocking_wait: Duration::from_secs(2),
+            },
         },
-    })?;
+    )?;
     let mut script = vec![
         turn(
             "file_write",
@@ -134,7 +122,7 @@ pub async fn run(
         turn("finish_job", json!({"label":"done","payload":{"ok":true}})),
     ];
     if extra.is_some() {
-        script.push(turn("shell", json!({"cmd":"git push origin"})));
+        script.push(turn("consumer_marker", json!({})));
         script.push(turn("shell", json!({"cmd":"echo ok"})));
     }
     script.push(vec![
@@ -156,33 +144,45 @@ pub async fn run(
     };
     let has_extra = extra.is_some();
     let mut builder = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(script)))
         .config(config)
         .policy(Arc::new(policy))
-        .extension(Arc::new(tools), Scope::Global)
-        .extension(Arc::new(HostExtension(record.clone())), Scope::Global)
-        .tool(record_tool("fixture", Arc::new(Mutex::new(vec![]))));
+        .shared_extension(Arc::new(tools), Scope::Global)
+        .shared_extension(Arc::new(HostExtension(record.clone())), Scope::Global)
+        .shared_tool(record_tool("fixture", Arc::new(Mutex::new(vec![]))));
     if let Some(extension) = extra {
-        builder = builder.extension(extension, Scope::Global);
+        builder = builder.shared_extension(extension, Scope::Global);
     }
     let agent = builder.build()?;
     let mut run = agent.prompt(None, "Exercise the tools").await?;
     let session = run.session_id().clone();
-    let mut events = run.events();
+    let run_id = run.run_id().clone();
     let mut settled = 0;
-    while let Some(event) = events.recv().await? {
-        if matches!(
-            event.kind,
-            EventKind::ToolCallStarted | EventKind::ToolCallSettled
-        ) {
-            println!("{}", serde_json::to_string(&*event)?);
-            if event.kind == EventKind::ToolCallSettled {
-                settled += 1;
+    let mut pauses = 0;
+    loop {
+        let mut events = run.events();
+        while let Some(event) = events.recv().await? {
+            if matches!(
+                event.kind,
+                EventKind::ToolCallStarted | EventKind::ToolCallSettled
+            ) {
+                println!("{}", serde_json::to_string(&*event)?);
+                if event.kind == EventKind::ToolCallSettled {
+                    settled += 1;
+                }
             }
         }
+        let status = run.done().await?.status;
+        if status != crabber::core::RunStatus::Paused {
+            assert_eq!(status, crabber::core::RunStatus::Completed);
+            break;
+        }
+        pauses += 1;
+        run = answer_questions(&agent, &session, &run_id, json!("yes")).await?;
     }
-    run.done().await?;
+    assert_eq!(pauses, 1);
     let SnapshotOutcome::Page(page) = store
         .snapshot(SnapshotRequest {
             session_id: session,
@@ -202,7 +202,7 @@ pub async fn run(
     assert_eq!(page.tool_calls.len(), if has_extra { 9 } else { 7 });
     assert!(settled >= 7);
     for (i, call) in page.tool_calls.iter().enumerate() {
-        let expected = if i == 4 || ((i == 2 || i == 8) && deny_shell) || i == 7 {
+        let expected = if i == 4 || ((i == 2 || i == 8) && deny_shell) {
             ToolCallStatus::Failed
         } else {
             ToolCallStatus::Completed
@@ -235,4 +235,57 @@ pub async fn run(
     );
     agent.close_extensions().await?;
     Ok(())
+}
+
+/// A scripted non-browser host records authenticated resolutions and continues.
+pub async fn answer_questions(
+    agent: &Agent,
+    session: &crabber::core::SessionId,
+    run: &crabber::core::RunId,
+    value: Value,
+) -> Result<crabber::RunHandle, Box<dyn std::error::Error>> {
+    use crabber::{
+        ContinueTool, ToolContinuation,
+        core::ControlId,
+        session::{ApprovalResolverClaim, ToolInteractionAnswer, ToolInteractionReply},
+    };
+    let snapshot = agent
+        .tool_continuation_snapshot(session, run)
+        .await?
+        .ok_or("no tool continuation")?;
+    let mut revision = snapshot.revision;
+    for interaction in &snapshot.interactions {
+        let receipt = agent
+            .answer_tool_interaction(ToolInteractionAnswer {
+                id: ControlId::new(),
+                expected_revision: revision,
+                session_id: session.clone(),
+                run_id: run.clone(),
+                continuation: snapshot.continuation.clone(),
+                interaction_id: interaction.id.clone(),
+                resolver: ApprovalResolverClaim {
+                    resolver_id: "example-host".into(),
+                    authority: interaction.description.authority().clone(),
+                    authority_claim: "scripted synthetic operator".into(),
+                },
+                reply: ToolInteractionReply::Answer {
+                    value: value.clone(),
+                },
+            })
+            .await?;
+        revision = receipt.revision;
+    }
+    let ToolContinuation::Started { handle, .. } = agent
+        .continue_tool(ContinueTool {
+            id: ControlId::new(),
+            session_id: session.clone(),
+            run_id: run.clone(),
+            continuation: snapshot.continuation,
+            expected_revision: revision,
+        })
+        .await?
+    else {
+        return Err("fresh continuation replayed".into());
+    };
+    Ok(handle)
 }

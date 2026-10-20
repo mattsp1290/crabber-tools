@@ -18,8 +18,8 @@ fn context(root: &WorkspaceRoot, cancel: CancellationToken) -> ToolContext {
         HostServices::default(),
         WorkspaceContext::from_persisted("test", root.path().to_str().unwrap()),
         Arc::new(|_| {}),
-        None,
     )
+    .with_resources(crabber::extension::ToolResourceOwner::new().resources())
 }
 fn options(root: &std::path::Path) -> Arc<Options> {
     let limits = Limits {
@@ -37,6 +37,8 @@ async fn call(tool: Arc<ToolDefinition>, options: &Options, args: Value) -> Valu
     tool.executor
         .execute_with_context(context(&options.root, CancellationToken::new()), args)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 fn keys(v: &Value) -> Vec<&str> {
@@ -307,6 +309,8 @@ async fn cancelled_and_context_free_calls_have_no_effect() {
             .executor
             .execute(json!({"path":"x","content":"bad"}))
             .await
+            .unwrap()
+            .json_value()
             .unwrap()["error"]["category"],
         "validation"
     );

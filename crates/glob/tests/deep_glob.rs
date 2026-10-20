@@ -45,6 +45,8 @@ fn deep_glob_worker() {
             support::context(&root, CancellationToken::new()),
             json!({"pattern":"**", "limit":5000}),
         ))
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["outcome"], "succeeded");
     assert_eq!(result["paths"].as_array().unwrap().len(), 1500);

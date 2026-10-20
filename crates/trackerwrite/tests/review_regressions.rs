@@ -35,6 +35,8 @@ async fn call(o: &Arc<Options>, value: Value) -> Value {
         .execute_with_context(support::context(&o.root, CancellationToken::new()), value)
         .await
         .unwrap()
+        .json_value()
+        .unwrap()
 }
 #[tokio::test]
 async fn text_and_failure_envelope_bounds() {

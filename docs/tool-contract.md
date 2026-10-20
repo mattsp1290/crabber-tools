@@ -12,7 +12,7 @@ Errors built by this library never contain absolute host paths, command output,
 or file contents. Search diagnostics are sanitized to enforce this rule.
 
 The host admits an absolute existing workspace once, as a capability directory.
-Every persisted session directory must be absent or an absolute canonical match;
+Every persisted session directory must be an absolute canonical match;
 the default AgentConfig directory `.` fails with `workspace_mismatch`. Reopen
 WorkspaceRoot after replacing the directory at the same path. Relative in-root
 symlinks work; absolute targets (even in-root) and escaping targets fail with
@@ -23,20 +23,20 @@ desired owner is the host uid; an attempted chown failure returns `io`. Other
 unprivileged replacements keep the new file’s host ownership. A crash may leave a `.crabber-tools-tmp-*`
 sibling, visible to file_list. Writes sync their temp file before rename.
 
-Cancellation produces no model-facing result: Crabber drops the executor future.
-A pre-cancelled token fails before any effect. A started blocking file operation
-may finish after interruption; its capacity and writer guards remain owned by the
-closure. Panics yield failed/unknown and release guards. Process guards kill the
-whole process group on future drop. Timeouts allow five seconds for reaping;
-leader exit allows five seconds for inherited pipes. Detached descendants or
-children that close their pipes are not tracked; hosts own their lifecycle.
+Cancellation produces no model-facing result. A pre-cancelled token fails before
+any effect. Native work registers with `ToolContext::resources()`; blocking
+closures retain their guards and actual joins, and process tasks kill and reap
+on cancellation, owner close or executor drop. A context without an owner refuses
+to start work with `unavailable`. A panicking blocking operation yields
+failed/unknown with no cleanup failure. The runtime can report
+`PhaseOutcomeUnknown` after interruption even when all resources joined: physical
+cleanup and durable outcome reconciliation are distinct. See [lifecycle](lifecycle.md).
 
 Workspace writers (write, edit, multi_edit, file_delete, file_move, shell and apply_patch) share a process-global lock
 keyed by canonical root. Read, list, search, glob and URL fetch take capacity only
 and are unordered against writes. Tracker mutations use backend hub locking and
 take shared capacity without the workspace writer lock. `user_interact` takes
-neither the writer lock nor mount capacity; its own `max_outstanding_prompts`
-semaphore bounds host prompts.
+neither the writer lock nor mount capacity.
 One deadline bounds the combined lock and capacity wait; expiry is `unavailable`.
 Sorted directory listings use an iterative traversal with at most 5000 pending
 names across the entire tree and a constant number of open directories; enumeration
@@ -44,8 +44,19 @@ must inspect directory names to establish ordering, even after the output cap.
 
 Registering only enabled tools is the per-node allowlist. `restrict_to_enabled`
 is run-wide and denies other extensions and host tools; use false for mixed
-mounts. Mount one root per agent or use Scope::Session on a shared agent; two
-global roots collide on tool names. `required_permissions` is advisory metadata,
+mounts. Use `shared_extension` for a single admitted root or `StandardToolsFactory`
+with host-owned admission for multiple workspaces. Two shared roots still collide
+on tool names. Missing session directory returns `workspace_mismatch` for every
+workspace tool, including URL fetch and tracker writes. Factory admission also
+requires a workspace ID. An owner is cached once per workspace ID: after remapping
+or replacing its directory, call `close_workspace_resources` before admitting it
+again. Capacity is shared within that workspace instance, so one session may use
+another's slots within the configured bound. Writer locks share the canonical root
+across all instances. The factory configuration hash covers policies and enabled
+schemas; the per-instance hash also includes the root. Root authorization comes
+from host admission and executor path checks, rather than plan identity.
+`ExactRoots` compares configured directory strings exactly; trailing slashes differ.
+`required_permissions` is advisory metadata,
 not enforced by StaticPolicy: hosts enforce permission rules by name or supply
 their own policy. Hosts also own command_guard analysis and output redaction.
 
@@ -625,7 +636,7 @@ Id: `standard.user-interact`. retry_safe: `false`. Advisory permission: `interac
       "type": "string"
     },
     "answer": {
-      "description": "Reserved for relaying an answer the host already collected for a pending question; when non-empty, the tool returns it immediately. Rejected when the host has a prompter configured. Leave empty when asking.",
+      "description": "Reserved for relaying an answer the host already collected for a pending question; when non-empty, the tool returns it immediately. Rejected on the durable surface. Leave empty when asking.",
       "type": "string"
     }
   },
@@ -637,45 +648,46 @@ Id: `standard.user-interact`. retry_safe: `false`. Advisory permission: `interac
 }
 ```
 
-Unknown fields are rejected; `answer` defaults to empty. Validation order is:
-empty/whitespace question (`validation`), question controls other than newline,
-carriage return and tab (`validation`), question byte bound (`too_large`), answer
-NUL (`validation`), then answer byte bound (`too_large`). Context is required.
+Unknown fields are rejected; `answer` defaults to empty. Questions must be nonblank,
+contain no controls except newline, carriage return and tab, and fit the configured
+byte bound (at most 8192 bytes on either surface). Answers reject NUL.
 
 | Surface | Answer | Behavior |
 | --- | --- | --- |
-| `Pending` | Empty | `outcome: pending`, echoed `question`, no error |
-| `Pending` | Nonempty | `outcome: succeeded`, echoed `answer` |
-| `Prompter` | Nonempty | `failed/validation`, answer reserved for pending surface |
-| `Prompter` | Empty | Ask the host, subject to the prompt semaphore and deadline |
+| `Pending` | Empty | `outcome: pending`, echoed question |
+| `Pending` | Nonempty | `outcome: succeeded`, echoed answer |
+| `Durable` | Nonempty | `failed/validation`, answer reserved for pending surface |
+| `Durable` | Empty | Persist one question and checkpoint; call Waiting, run Paused |
 
-`Surface::Pending` is a relay, not a gate. A model can supply `answer` and receive
-`succeeded` without human involvement. There is no approval enforcement or
-question/answer correlation. Hosts must not treat this success as human consent;
-use `Surface::Prompter` when a human must answer.
+`Surface::Pending` is a relay, not a gate. A model can supply an answer without
+human involvement; there is no question/answer correlation or consent enforcement.
+A model-supplied answer, relay echo, timeout or reconnect is never a human decision.
 
-Prompter admission is immediate: exhaustion returns `failed/unavailable` with
-"another question is outstanding". The host future runs in an abort-on-drop task
-that owns the prompt permit until the host future actually drops. Biased selection
-checks cancellation before the deadline and host reply. Cancellation is an
-executor error; deadline expiry is `failed/timeout` ("user response timed out").
-Successful host replies have trailing newline characters trimmed, then NUL and
-size checks repeated. Success returns `outcome` and nonempty `answer`; an empty
-answer is omitted. Host errors become `failed/io` ("prompt failed"), discarding
-host text. A host panic becomes `failed/unknown` ("prompter panicked").
+`UserInteractPolicy::durable(authority)` uses a `ResumableTool`. The host reads
+`tool_continuation_snapshot`, authenticates the resolver, records
+`answer_tool_interaction`, then invokes `continue_tool`. Answered strings have
+trailing newlines trimmed; empty answers omit the answer key. Recorded Deny,
+Cancel and Expire become failed results with `denied`, `cancelled` and `timeout`
+respectively. These host decisions differ from executor cancellation. The runtime
+checks correlation, authority, revisions, duplicate/conflicting controls and the
+response schema before delivering accepted responses to the tool.
 
-`UserInteractPolicy::pending()` defaults to 64 KiB question, 1 MiB answer,
-300-second wait, and one outstanding prompt. Host bounds must be positive and
-at most 64 KiB question, 1 MiB answer, 600-second wait and 16 outstanding prompts,
-including for `Pending`. Prompter identity is 1..128 ASCII bytes, alphanumeric or
-`-`, `_`, `.`, `/`, with no leading `-`; it participates in mount identity.
+Durable answers default to and cannot exceed `MAX_DURABLE_ANSWER_BYTES` (8192).
+The response schema's maxLength counts code points; resume also checks UTF-8 byte
+length. A schema-accepted oversized byte string therefore returns `too_large`.
+The pending relay's maximum answer remains 1 MiB. All bounds participate in
+configuration identity; changing authority or bounds refuses old continuations.
 
-Prompters must be drop-safe and must not block while polled. Questions and answers
-cross the host boundary unredacted; this tool must not collect secrets. Hosts own
-admission, permissions and redaction. No stdin/stderr is used. The prompter,
-answer precedence, control checks, byte/wait bounds, prompt capacity and absence
-of a model-facing `canceled` category differ from upstream. Categories are
-`validation`, `too_large`, `io`, `timeout`, `unavailable`, `unknown`.
+`expires_after` is evaluated by the store clock; the run stays Paused until the
+host records Expire, Deny, Cancel or an answer. Nothing expires a question
+automatically. Durations must represent at least one millisecond and fit u64 milliseconds;
+after expiry the store accepts only Expire. A reconstructed host must restore the
+same store, tool configuration and declared behavior version. See [lifecycle](lifecycle.md)
+for the untested crash-after-Started recovery boundary.
+
+Questions and answers cross the host boundary unredacted; never collect secrets.
+Hosts own admission, permissions and tool_result_redactor redaction. Answer data
+grants no additional permission. This tool performs no stdin/stderr I/O.
 
 ## multi_edit
 
@@ -823,3 +835,16 @@ operations, except `user_interact`, which has none. Hosts can retain a six-tool
 subset with all three optional policies `None`.
 
 `EnabledSet::all()` includes destructive `file_delete` and `file_move`; hosts can subtract `ToolId::BEYOND_PARITY` or select `EnabledSet::eino_parity()`.
+
+## Typed output and call status
+
+Executors return Crabber `ToolOutput` with the JSON envelope intact. Every
+`outcome: failed` sets `is_error`, so the persisted call is Failed. Success and
+pending envelopes are Completed; shell nonzero exits remain succeeded and callers
+read exit_code. Search partial success also remains Completed.
+
+Crabber caps serialized output at 4 MiB. After per-stream caps, the shared envelope
+adapter may further truncate shell stdout/stderr or URL content on UTF-8 boundaries,
+setting the corresponding `*_truncated` marker while retaining outcome, exit code
+and other fields. Host-selected shell caps up to 16 MiB remain valid. Envelopes that
+still cannot fit return a bounded `too_large` failure.
