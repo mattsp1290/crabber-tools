@@ -1,6 +1,7 @@
 [
   {
-    "upstream_sha256": "a2f1dafaa82d7696a638daf2d8dad72cf0a638380964d419a8bf0bd1de621146"
+    "upstream_sha256": "a2f1dafaa82d7696a638daf2d8dad72cf0a638380964d419a8bf0bd1de621146",
+    "durable_mapping": "CLI stdin lines become a scripted host answer with trailing newlines trimmed; stdin errors become recorded host Deny (denied). No process IO or implicit consent."
   },
   {
     "name": "answer provided cli",
@@ -43,7 +44,11 @@
       "hello",
       "",
       ""
-    ]
+    ],
+    "durable": {
+      "reply": "answer",
+      "value": "hello\n\n"
+    }
   },
   {
     "name": "multi-line answer joined correctly",
@@ -62,7 +67,11 @@
       "line three",
       "",
       ""
-    ]
+    ],
+    "durable": {
+      "reply": "answer",
+      "value": "line one\nline two\nline three\n\n"
+    }
   },
   {
     "name": "answer terminated by EOF",
@@ -77,7 +86,11 @@
     },
     "stdin_lines": [
       "eof answer"
-    ]
+    ],
+    "durable": {
+      "reply": "answer",
+      "value": "eof answer"
+    }
   },
   {
     "name": "question printed to injected stderr",
@@ -92,7 +105,11 @@
     "stdin_lines": [
       "",
       ""
-    ]
+    ],
+    "durable": {
+      "reply": "answer",
+      "value": "\n"
+    }
   },
   {
     "name": "stdin read error returns io error",
@@ -105,7 +122,16 @@
       "category": "io",
       "answer_key_present": false
     },
-    "stdin_error": true
+    "stdin_error": true,
+    "durable": {
+      "reply": "deny",
+      "value": ""
+    },
+    "durable_expected": {
+      "outcome": "failed",
+      "category": "denied",
+      "answer_key_present": false
+    }
   },
   {
     "name": "returns OutcomePending immediately",
@@ -168,7 +194,11 @@
     },
     "stdin_lines": [
       ""
-    ]
+    ],
+    "durable": {
+      "reply": "answer",
+      "value": ""
+    }
   },
   {
     "name": "whitespace-only question returns validation error",
@@ -183,6 +213,10 @@
     },
     "stdin_lines": [
       ""
-    ]
+    ],
+    "durable": {
+      "reply": "answer",
+      "value": ""
+    }
   }
 ]

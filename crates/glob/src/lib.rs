@@ -82,17 +82,21 @@ fn failure(error: ToolError) -> Value {
 struct GlobTool(Arc<Options>);
 #[async_trait]
 impl ToolExecutor for GlobTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(failure(ToolError::new(
-            category::VALIDATION,
-            "context required",
-        )))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         args: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        self.invoke(ctx, args)
+            .await
+            .map(|value| crabber_tools_core::to_output(value, &[]))
+    }
+}
+impl GlobTool {
+    async fn invoke(&self, ctx: ToolContext, args: Value) -> Result<Value, ExtensionError> {
         check_cancelled(&ctx.cancel)?;
         let args = match serde_json::from_value::<Args>(args)
             .map_err(|_| ToolError::new(category::VALIDATION, "invalid arguments"))
@@ -119,11 +123,10 @@ impl ToolExecutor for GlobTool {
             }
         };
         let options = self.0.clone();
-        let cancel = ctx.cancel.clone();
-        run_blocking(&ctx.cancel, move || {
+        run_blocking_owned(&ctx, move |cancel| {
             let _permit = permit;
             match pattern::compile(&args.1) {
-                Ok(pattern) => walk::discover(&options.root, args.0, pattern, args.2, &cancel)
+                Ok(pattern) => walk::discover(&options.root, args.0, pattern, args.2, cancel)
                     .unwrap_or_else(failure),
                 Err(error) => failure(error),
             }

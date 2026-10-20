@@ -18,7 +18,7 @@ The [Rust contract](tool-contract.md) defines bounds and envelope omissions.
 | applypatch | crabber-tools-applypatch |
 | shell | crabber-tools-shell |
 | urlfetch | crabber-tools-urlfetch |
-| userinteract | crabber-tools-userinteract; SurfaceMCP → Pending, SurfaceCLI → Prompter |
+| userinteract | crabber-tools-userinteract; SurfaceMCP → Pending, SurfaceCLI → Durable |
 | tracker + tracker/beads | TrackerPolicy over the bn CLI; no writer trait |
 | trackerwrite | crabber-tools-trackerwrite |
 | catalog | crabber-tools-catalog: StandardTools, metadata(), EINO_PARITY |
@@ -45,14 +45,14 @@ of exact runtime equivalence.
 | D11 | Patch resource / commit policy | Additional 16 MiB per-file and 64 MiB aggregate caps yield too_large. Capability alias targets are checked for overlap; add/move installation is no-clobber. Commit failure partial=true is conservative even if no file was changed by the failing operation. diff_truncated is omitted (no generated diff); Rust always emits partial=false where Go may omit it, and marks a failed move as failed rather than partial; not_directory, workspace_mismatch and unavailable are additional categories. |
 | D12 | URL policy | File URLs are workspace-confined. HTTPS has explicit host/address policy, pinned DNS, no proxy/retry, manually checked redirects (max five), 30-second total deadline, 8192-byte URLs and 1 MiB UTF-8 bodies. Adds path_escape, not_directory and forwarded is_directory filesystem errors, too_large, binary, timeout, workspace_mismatch, unavailable. Directory resources detected by metadata return io. file://localhost normalizes locally; other authorities and file queries fail validation. |
 | D13 | Tracker backend | bn CLI replaces CloseWriter and optional capability traits. Comment/transition are always available under host workflow policy; link_pr remains unsupported_op. IDs, states, reason and input bounds validate before dispatch. Empty reason uses a default. Exit-code mapping differs from typed adapter errors (see matrix); adds io, workspace_mismatch and unavailable. No raw output, paths or credentials in errors. |
-| D14 | Interaction surface / metadata | Host UserPrompter replaces stdin/stderr. user_interact `/description` describes host collection; `/parameters/properties/answer/description` reserves relayed answers for Pending and rejects them on Prompter. Questions and answers cross the host boundary unredacted; do not collect secrets. |
-| D15 | Interaction validation / bounds | Questions reject controls except newline/carriage return/tab. Answers reject NUL. Whole question/answer byte caps add too_large; bounded host wait adds timeout and own prompt semaphore adds unavailable. Host errors are sanitized; host panics yield unknown. Hosts must supply drop-safe, nonblocking futures. |
-| D16 | Pending relay | No approval or question/answer correlation: model-supplied answers succeed on Pending. Prompter rejects them. Never interpret Pending success as human consent. |
+| D14 | Interaction surface / metadata | Durable host responses replace stdin/stderr. user_interact `/description` describes host collection; `/parameters/properties/answer/description` reserves relayed answers for Pending and rejects them on Durable. Questions and answers cross the host boundary unredacted; do not collect secrets. |
+| D15 | Interaction validation / bounds | Questions reject controls except newline/carriage return/tab. Answers reject NUL. Question caps are 8192 bytes on both surfaces; durable answers are at most 8192 bytes and relay answers at most 1 MiB. Recorded host Deny/Cancel/Expire yield denied/cancelled/timeout. Hosts explicitly expire overdue questions; no prompt-wait semaphore or process I/O remains. |
+| D16 | Pending relay | No approval or question/answer correlation: model-supplied answers succeed on Pending. Durable rejects them. Never interpret Pending success as human consent. |
 | D17 | JSON / result API | serde_json keeps the last duplicate top-level key rather than Go's rejection. Unknown fields are rejected. No RawJSON carrier or per-result IsRetryable API; metadata retry_safe is compared, while hosts own retry decisions. Optional zero/empty Rust keys may be omitted as documented below. |
 
 `Surface::Pending` is a relay, not a gate. A model can call with `answer` set and
 receive `succeeded` without any human involvement. Hosts must not treat this as
-human consent; use `Surface::Prompter` when a human must answer.
+human consent; use `Surface::Durable` when a human must answer.
 
 ## Per-tool contract matrix
 
@@ -172,7 +172,7 @@ replacement environment, input validation and supported ops are D13.
 | RawJSON | No Rust carrier (D17). |
 
 Mirrored categories: validation, io, unknown. Adds too_large, timeout, unavailable
-(D15). Host prompts, Prompter answer rejection, control checks and unredacted
+(D15). Durable questions, Durable answer rejection, control checks and unredacted
 boundary are D14/D15. Pending is a relay (D16). All outcomes remain non-retry-safe.
 
 ## Beyond parity
@@ -197,8 +197,14 @@ inventory section coverage; reviewers check the matrix contents.
 
 The copied Go runtime corpora for apply_patch and user_interact run in Rust tests.
 Scripted catalog runs exercise all tools without credentials, network or a real
-hub, plus prompter interruption and independent prompt/mount capacities.
+hub, plus durable continuation and independent workspace capacities.
 [PROVENANCE.md](../fixtures/eino-tools/PROVENANCE.md) records extraction and hashes
 of catalog.json and the committed inert crabber-fixtures.go.txt extractor.
 Fixtures are frozen at `c0975d6`: upstream drift is detected only by re-running
 extraction against a newer revision, never by CI.
+
+Version 0.4.0 adoption: durable questions use Crabber's persisted interaction
+protocol. Recorded denials and cancellation have `denied` and `cancelled` tool
+categories; executor interruption remains a runtime concern. Failure envelopes
+now set ToolOutput.is_error. See [lifecycle](lifecycle.md) for actual resource joins
+and interrupted native-phase uncertainty.

@@ -24,7 +24,10 @@ fn paths_and_session_admission() {
     let root = WorkspaceRoot::open(tmp.path()).unwrap();
     std::fs::write(tmp.path().join("file"), "hello").unwrap();
     assert!(WorkspaceRoot::open(&tmp.path().join("file")).is_err());
-    assert!(root.matches_session_directory(None).is_ok());
+    assert_eq!(
+        root.matches_session_directory(None).unwrap_err().category,
+        category::WORKSPACE_MISMATCH
+    );
     assert!(
         root.matches_session_directory(Some(tmp.path().to_str().unwrap()))
             .is_ok()
@@ -255,4 +258,209 @@ fn process_running(pid: u32) -> bool {
         return false;
     }
     rustix::process::test_kill_process(rustix::process::Pid::from_raw(pid as i32).unwrap()).is_ok()
+}
+
+#[test]
+fn typed_output_status_and_serialized_bound() {
+    assert!(to_output(failed(category::VALIDATION, "invalid"), &[]).is_error());
+    assert!(!to_output(serde_json::json!({"outcome":"succeeded"}), &[]).is_error());
+    let huge = to_output(
+        serde_json::json!({"outcome":"succeeded", "payload":"x".repeat(5*1024*1024)}),
+        &[],
+    );
+    assert!(huge.is_error());
+    assert_eq!(huge.json_value().unwrap()["error"]["category"], "too_large");
+    let shell = to_output(
+        serde_json::json!({"outcome":"succeeded", "stdout":"\u{1}".repeat(3*1024*1024), "stderr":"", "exit_code":17}),
+        &["stdout", "stderr"],
+    );
+    assert!(!shell.is_error());
+    let value = shell.json_value().unwrap();
+    assert_eq!(value["outcome"], "succeeded");
+    assert_eq!(value["stdout_truncated"], true);
+    assert_eq!(value["exit_code"], 17);
+    assert!(serde_json::to_vec(&value).unwrap().len() <= 4 * 1024 * 1024);
+}
+
+fn owned_context(
+    owner: Option<&crabber::extension::ToolResourceOwner>,
+) -> crabber::extension::ToolContext {
+    let ctx = crabber::extension::ToolContext::new(
+        crabber::core::SessionId::new(),
+        crabber::core::RunId::new(),
+        crabber::core::ToolCallId::new(),
+        CancellationToken::new(),
+        crabber::extension::HostServices::default(),
+        crabber::extension::WorkspaceContext::from_persisted("test", "/synthetic"),
+        std::sync::Arc::new(|_| {}),
+    );
+    match owner {
+        Some(owner) => ctx.with_resources(owner.resources()),
+        None => ctx,
+    }
+}
+#[test]
+fn exact_roots_refuses_missing_unknown_and_drifted_identity() {
+    use crabber::extension::WorkspaceContext;
+    let dir = tempfile::tempdir().unwrap();
+    let canonical = dir.path().canonicalize().unwrap();
+    let admission = ExactRoots::new([("known".into(), canonical.clone())]).unwrap();
+    for (id, path) in [("", ""), ("known", ""), ("", canonical.to_str().unwrap())] {
+        assert!(matches!(
+            admission.admit(&WorkspaceContext::from_persisted(id, path)),
+            Err(crabber::ExtensionError::WorkspaceUnavailable)
+        ));
+    }
+    for (id, path) in [
+        ("unknown", canonical.to_str().unwrap()),
+        ("known", "/other"),
+    ] {
+        assert!(matches!(
+            admission.admit(&WorkspaceContext::from_persisted(id, path)),
+            Err(crabber::ExtensionError::Plan(_))
+        ));
+    }
+    assert!(
+        admission
+            .admit(&WorkspaceContext::from_persisted(
+                "known",
+                canonical.to_str().unwrap()
+            ))
+            .is_ok()
+    );
+    assert!(ExactRoots::new([("known".into(), std::path::PathBuf::from("relative"))]).is_err());
+    let trailing = format!("{}/", canonical.display());
+    assert!(
+        admission
+            .admit(&WorkspaceContext::from_persisted("known", &trailing))
+            .is_err()
+    );
+}
+#[tokio::test]
+async fn ownerless_context_fails_closed() {
+    let ctx = owned_context(None);
+    let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = called.clone();
+    let output = run_blocking_owned(&ctx, move |_| {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        json!({"outcome":"succeeded"})
+    })
+    .await
+    .unwrap();
+    assert_eq!(output["error"]["category"], "unavailable");
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg("touch never")
+        .current_dir(dir.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_policy(&mut cmd, &EnvPolicy::Replace(vec![]), None);
+    assert!(matches!(
+        run_process_owned(
+            &ctx,
+            cmd,
+            1024,
+            tokio::time::Instant::now() + Duration::from_secs(1)
+        )
+        .await,
+        Err(ProcessRunError::Unavailable)
+    ));
+    assert!(!dir.path().join("never").exists());
+}
+#[tokio::test]
+async fn owned_process_task_is_joined_on_executor_drop() {
+    let dir = tempfile::tempdir().unwrap();
+    let owner = crabber::extension::ToolResourceOwner::new();
+    let ctx = owned_context(Some(&owner));
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg("echo $$ > leader; sleep 60 & echo $! > child; wait")
+        .current_dir(dir.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_policy(&mut cmd, &EnvPolicy::minimal_allowlist(), None);
+    let worker = tokio::spawn(async move {
+        run_process_owned(
+            &ctx,
+            cmd,
+            1024,
+            tokio::time::Instant::now() + Duration::from_secs(60),
+        )
+        .await
+    });
+    for _ in 0..200 {
+        if dir.path().join("child").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let leader = std::fs::read_to_string(dir.path().join("leader"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let child = std::fs::read_to_string(dir.path().join("child"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    worker.abort();
+    assert!(worker.await.err().unwrap().is_cancelled());
+    owner.close();
+    let report = owner.drain(Duration::from_secs(2)).await;
+    assert!(report.sealed);
+    assert!(report.joined >= 1);
+    assert_eq!(report.pending, 0);
+    assert!(report.failures.is_empty());
+    assert!(!process_running(leader));
+    for _ in 0..200 {
+        if !process_running(child) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!process_running(child));
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slow_blocking_cleanup_retains_join_until_finished() {
+    let owner = crabber::extension::ToolResourceOwner::new();
+    let ctx = owned_context(Some(&owner));
+    let cancel = ctx.cancel.clone();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = tokio::spawn(async move {
+        run_blocking_owned(&ctx, move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            json!({"outcome":"succeeded"})
+        })
+        .await
+    });
+    entered_rx.await.unwrap();
+    cancel.cancel();
+    assert!(worker.await.unwrap().is_err());
+    let incomplete = owner.drain(Duration::from_millis(10)).await;
+    assert_eq!(incomplete.pending, 1);
+    assert_eq!(incomplete.joined, 0);
+    release_tx.send(()).unwrap();
+    let complete = owner.drain(Duration::from_secs(2)).await;
+    assert_eq!(complete.pending, 0);
+    assert_eq!(complete.joined, 1);
+    assert!(complete.failures.is_empty());
+}
+#[tokio::test]
+async fn blocking_panic_is_tool_failure_with_clean_resource_join() {
+    let owner = crabber::extension::ToolResourceOwner::new();
+    let ctx = owned_context(Some(&owner));
+    let value = run_blocking_owned(&ctx, |_| panic!("injected private diagnostic"))
+        .await
+        .unwrap();
+    assert_eq!(value["error"]["category"], "unknown");
+    assert!(!value.to_string().contains("private"));
+    let report = owner.drain(Duration::from_secs(2)).await;
+    assert_eq!(report.joined, 1);
+    assert_eq!(report.pending, 0);
+    assert!(report.failures.is_empty());
 }

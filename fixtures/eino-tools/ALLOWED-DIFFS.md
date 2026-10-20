@@ -30,15 +30,15 @@ descriptions, and schema fields match the extracted upstream fixtures.
     "tool": "user_interact",
     "pointer": "/description",
     "upstream": "Ask the user a question and return their answer as a string. In CLI mode, prints the question to stderr and reads a multi-line answer from stdin (terminated by a blank line or EOF). In MCP mode, returns immediately with a pending result — provide the user's answer in a follow-up call by populating the answer field. Does not format questions, validate answers, or offer multiple-choice options.",
-    "rust": "Ask the user a question and return their answer as a string. Depending on host configuration, either waits for the host to collect the answer or returns immediately with a pending result — provide the user's answer in a follow-up call by populating the answer field. Does not format questions, validate answers, or offer multiple-choice options.",
-    "reason": "Host prompter replaces stdin/stderr; one description for both surfaces."
+    "rust": "Ask the user a question and return their answer as a string. Depending on host configuration, either pauses until the host records the user's answer or returns immediately with a pending result — provide the user's answer in a follow-up call by populating the answer field. Does not format questions, validate answers, or offer multiple-choice options.",
+    "reason": "Durable host responses replace stdin/stderr; one description for both surfaces."
   },
   {
     "tool": "user_interact",
     "pointer": "/parameters/properties/answer/description",
     "upstream": "Reserved for the agent loop. Do not populate this field — it will be set by the loop after the user responds. When non-empty, the tool returns this value as the answer immediately.",
-    "rust": "Reserved for relaying an answer the host already collected for a pending question; when non-empty, the tool returns it immediately. Rejected when the host has a prompter configured. Leave empty when asking.",
-    "reason": "Prompter surface rejects model-supplied answers."
+    "rust": "Reserved for relaying an answer the host already collected for a pending question; when non-empty, the tool returns it immediately. Rejected on the durable surface. Leave empty when asking.",
+    "reason": "Durable surface rejects model-supplied answers."
   }
 ]
 ```

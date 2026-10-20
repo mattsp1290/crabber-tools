@@ -20,14 +20,22 @@ fn diagnostic(code: i32, stderr: &CappedOutput) -> (&'static str, &'static str) 
         _ => (category::UNKNOWN, "tracker command failed"),
     }
 }
-pub(crate) async fn run(options: &Options, args: &Args, argv: Vec<OsString>) -> Value {
-    run_until(options, args, argv, Instant::now() + TIMEOUT).await
+pub(crate) async fn run(
+    options: &Options,
+    args: &Args,
+    argv: Vec<OsString>,
+    ctx: &crabber::extension::ToolContext,
+    permit: impl Send + 'static,
+) -> Value {
+    run_until(options, args, argv, Instant::now() + TIMEOUT, ctx, permit).await
 }
 async fn run_until(
     options: &Options,
     args: &Args,
     argv: Vec<OsString>,
     deadline: Instant,
+    ctx: &crabber::extension::ToolContext,
+    permit: impl Send + 'static,
 ) -> Value {
     let fail = |e| result::failure(&args.op, &args.id, e);
     let mut command = Command::new(&options.policy.bn_binary);
@@ -37,24 +45,28 @@ async fn run_until(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     apply_policy(&mut command, &options.policy.env(), None);
-    let mut guard = match ProcessGroupGuard::spawn(&mut command) {
-        Ok(g) => g,
-        Err(_) => {
-            return fail(ToolError::new(
-                "api_request",
-                "could not start tracker command",
-            ));
-        }
-    };
-    let captured = match capture(&mut guard, DIAGNOSTIC_CAP, deadline).await {
-        Ok(c) => c,
-        Err(_) => {
-            return fail(ToolError::new(
-                category::IO,
-                "could not capture tracker diagnostics",
-            ));
-        }
-    };
+    let captured =
+        match run_process_owned_guarded(ctx, command, DIAGNOSTIC_CAP, deadline, permit).await {
+            Ok(c) => c,
+            Err(ProcessRunError::Unavailable) => {
+                return fail(ToolError::new(
+                    category::UNAVAILABLE,
+                    "call resources unavailable",
+                ));
+            }
+            Err(ProcessRunError::Spawn) => {
+                return fail(ToolError::new(
+                    "api_request",
+                    "could not start tracker command",
+                ));
+            }
+            Err(_) => {
+                return fail(ToolError::new(
+                    category::IO,
+                    "could not capture tracker diagnostics",
+                ));
+            }
+        };
     if captured.timed_out {
         return fail(ToolError::new(
             category::TIMEOUT,
@@ -111,6 +123,11 @@ mod tests {
                 &args,
                 argv,
                 Instant::now() + Duration::from_secs(1),
+                &support::context(
+                    &child_options.root,
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+                (),
             )
             .await
         });

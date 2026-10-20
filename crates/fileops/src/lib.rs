@@ -48,14 +48,14 @@ struct FileTool {
 }
 #[async_trait]
 impl ToolExecutor for FileTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(failed(category::VALIDATION, "context required"))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         args: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
         self.invoke(ctx, args).await.map(|mut value| {
             let extras: &[(&str, Value)] = match self.kind {
                 Kind::List => &[("entries", serde_json::json!([]))],
@@ -70,7 +70,7 @@ impl ToolExecutor for FileTool {
                     .entry(*key)
                     .or_insert_with(|| default.clone());
             }
-            value
+            crabber_tools_core::to_output(value, &[])
         })
     }
 }
@@ -112,10 +112,9 @@ impl FileTool {
             }
         };
         let options = self.options.clone();
-        let cancel = ctx.cancel.clone();
-        run_blocking(&ctx.cancel, move || {
+        run_blocking_owned(&ctx, move |cancel| {
             let _guards = guards;
-            request.run(&options, &cancel)
+            request.run(&options, cancel)
         })
         .await
     }

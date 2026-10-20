@@ -81,14 +81,14 @@ pub fn definition(options: Arc<Options>) -> Result<Arc<ToolDefinition>, Extensio
 struct SearchTool(Arc<Options>);
 #[async_trait]
 impl ToolExecutor for SearchTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(failed(category::VALIDATION, "context required"))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         value: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
         let start = tokio::time::Instant::now();
         self.invoke(ctx, value).await.map(|mut value| {
             for (key, default) in [
@@ -102,7 +102,7 @@ impl ToolExecutor for SearchTool {
                     .or_insert(default);
             }
             value["duration_ms"] = serde_json::json!(start.elapsed().as_millis() as u64);
-            value
+            crabber_tools_core::to_output(value, &[])
         })
     }
 }
@@ -120,7 +120,7 @@ impl SearchTool {
         {
             return Ok(e.value());
         }
-        let _permit = match acquire_read(&self.0.capacity, &self.0.limits, &ctx.cancel).await {
+        let permit = match acquire_read(&self.0.capacity, &self.0.limits, &ctx.cancel).await {
             Ok(p) => p,
             Err(AcquireError::Cancelled) => return Err(ExtensionError::Tool("cancelled".into())),
             Err(AcquireError::Unavailable) => {
@@ -134,7 +134,7 @@ impl SearchTool {
         }
         tokio::select! {biased;
             _=ctx.cancel.cancelled()=>Err(ExtensionError::Tool("cancelled".into())),
-            result=rg::run(&self.0,args)=>Ok(result),
+            result=rg::run(&self.0,args,&ctx,permit)=>Ok(result),
         }
     }
 }

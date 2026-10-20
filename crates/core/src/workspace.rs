@@ -32,10 +32,13 @@ impl WorkspaceRoot {
     pub fn dir(&self) -> &Dir {
         &self.dir
     }
-    /// Absent directories are accepted; relative or different directories fail closed.
+    /// Missing, relative or different session directories fail closed.
     pub fn matches_session_directory(&self, directory: Option<&str>) -> Result<(), ToolError> {
         let Some(d) = directory else {
-            return Ok(());
+            return Err(ToolError::new(
+                category::WORKSPACE_MISMATCH,
+                "session workspace unavailable",
+            ));
         };
         if Path::new(d).is_absolute()
             && Path::new(d).canonicalize().ok().as_ref() == Some(&self.root)
@@ -105,5 +108,66 @@ pub fn category_for_io(error: &io::Error) -> &'static str {
         io::ErrorKind::NotADirectory => category::NOT_DIRECTORY,
         io::ErrorKind::IsADirectory => category::IS_DIRECTORY,
         _ => category::IO,
+    }
+}
+
+/// Host-owned authorization of persisted workspace routing identity.
+/// Implementations must refuse missing identity and never derive authority from
+/// an unconfigured session directory or the process working directory.
+pub trait WorkspaceAdmission: Send + Sync {
+    /// Admit a configured workspace, or return WorkspaceUnavailable / Plan.
+    /// Factories invoke this on the blocking pool; implementations may perform I/O.
+    fn admit(
+        &self,
+        workspace: &crabber::extension::WorkspaceContext,
+    ) -> Result<Arc<WorkspaceRoot>, ExtensionError>;
+}
+
+/// An explicit host table of workspace IDs and exact absolute directory strings.
+/// Persist canonical paths: even a trailing slash differs from the stored name.
+pub struct ExactRoots(std::collections::BTreeMap<String, PathBuf>);
+impl ExactRoots {
+    /// Validate a host admission table. Duplicate or empty IDs are rejected.
+    pub fn new(
+        entries: impl IntoIterator<Item = (String, PathBuf)>,
+    ) -> Result<Self, ExtensionError> {
+        let mut roots = std::collections::BTreeMap::new();
+        for (id, path) in entries {
+            if id.is_empty() {
+                return Err(ExtensionError::Plan("workspace id empty".into()));
+            }
+            if !path.is_absolute() || path.to_str().is_none() {
+                return Err(ExtensionError::Plan(
+                    "workspace path must be absolute UTF-8".into(),
+                ));
+            }
+            if roots.insert(id, path).is_some() {
+                return Err(ExtensionError::Plan("duplicate workspace id".into()));
+            }
+        }
+        Ok(Self(roots))
+    }
+}
+impl WorkspaceAdmission for ExactRoots {
+    fn admit(
+        &self,
+        workspace: &crabber::extension::WorkspaceContext,
+    ) -> Result<Arc<WorkspaceRoot>, ExtensionError> {
+        let id = workspace
+            .workspace_id()
+            .ok_or(ExtensionError::WorkspaceUnavailable)?;
+        let directory = workspace
+            .directory()
+            .ok_or(ExtensionError::WorkspaceUnavailable)?;
+        let path = self
+            .0
+            .get(id)
+            .filter(|path| path.to_str() == Some(directory))
+            .ok_or_else(|| ExtensionError::Plan("workspace".into()))?;
+        let root = WorkspaceRoot::open(path)?;
+        if path.canonicalize().ok().as_ref() != Some(&root.path().to_path_buf()) {
+            return Err(ExtensionError::Plan("workspace".into()));
+        }
+        Ok(root)
     }
 }

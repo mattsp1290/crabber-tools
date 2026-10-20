@@ -15,6 +15,7 @@ pub fn check_cancelled(cancel: &CancellationToken) -> Result<(), ExtensionError>
 }
 /// Offload a bounded operation. A panic produces failed(unknown); cancellation
 /// returns immediately while the closure finishes with its guards still owned.
+#[doc(hidden)]
 pub async fn run_blocking(
     cancel: &CancellationToken,
     f: impl FnOnce() -> Value + Send + 'static,
@@ -37,4 +38,33 @@ pub fn temp_name(prefix: &str) -> std::io::Result<String> {
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ))
+}
+
+/// Register blocking work with the call owner. Cancellation returns promptly;
+/// the resource scope retains the join and the closure's permits until it ends.
+/// Ownerless or sealed contexts never start the closure.
+pub async fn run_blocking_owned(
+    ctx: &crabber::extension::ToolContext,
+    f: impl FnOnce(&CancellationToken) -> Value + Send + 'static,
+) -> Result<Value, ExtensionError> {
+    check_cancelled(&ctx.cancel)?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let cancel = ctx.cancel.clone();
+    if ctx
+        .resources()
+        .spawn(async move {
+            let value = tokio::task::spawn_blocking(move || f(&cancel))
+                .await
+                .unwrap_or_else(|_| failed(category::UNKNOWN, "internal"));
+            let _ = tx.send(value);
+            Ok(())
+        })
+        .is_err()
+    {
+        return Ok(failed(category::UNAVAILABLE, "call resources unavailable"));
+    }
+    tokio::select! { biased;
+        _ = ctx.cancel.cancelled() => Err(ExtensionError::Tool("cancelled".into())),
+        result = rx => Ok(result.unwrap_or_else(|_| failed(category::UNKNOWN, "internal"))),
+    }
 }

@@ -1,26 +1,10 @@
 //! Additional writer contracts, lifecycle and capability regressions.
-use crabber::{
-    ToolDefinition,
-    core::{RunId, SessionId, ToolCallId},
-    extension::{HostServices, ToolContext, WorkspaceContext},
-};
+use crabber::ToolDefinition;
 use crabber_tools_core::*;
 use crabber_tools_fileops::{self as fileops, Options};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
-fn context(root: &WorkspaceRoot, cancel: CancellationToken) -> ToolContext {
-    ToolContext::new(
-        SessionId::new(),
-        RunId::new(),
-        ToolCallId::new(),
-        cancel,
-        HostServices::default(),
-        WorkspaceContext::from_persisted("test", root.path().to_str().unwrap()),
-        Arc::new(|_| {}),
-        None,
-    )
-}
 fn options(root: &std::path::Path) -> Arc<Options> {
     let limits = Limits {
         max_in_flight: 1,
@@ -35,8 +19,10 @@ fn options(root: &std::path::Path) -> Arc<Options> {
 }
 async fn call(tool: Arc<ToolDefinition>, options: &Options, args: Value) -> Value {
     tool.executor
-        .execute_with_context(context(&options.root, CancellationToken::new()), args)
+        .execute_owned_context(context(&options.root, CancellationToken::new()), args)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 fn keys(v: &Value) -> Vec<&str> {
@@ -259,7 +245,7 @@ async fn failure_envelope_keys_and_lifecycle() {
         assert_eq!(keys(&v), early);
         let v = tool
             .executor
-            .execute_with_context(
+            .execute_owned_context(
                 context(
                     &WorkspaceRoot::open(sibling.path()).unwrap(),
                     CancellationToken::new(),
@@ -267,6 +253,8 @@ async fn failure_envelope_keys_and_lifecycle() {
                 args(i, "x"),
             )
             .await
+            .unwrap()
+            .json_value()
             .unwrap();
         assert_eq!(v["error"]["category"], "workspace_mismatch");
         assert_eq!(keys(&v), early);
@@ -282,7 +270,7 @@ async fn failure_envelope_keys_and_lifecycle() {
         cancel.cancel();
         assert!(
             tool.executor
-                .execute_with_context(context(&o.root, cancel), args(i, "x"))
+                .execute_owned_context(context(&o.root, cancel), args(i, "x"))
                 .await
                 .is_err()
         );
@@ -331,8 +319,7 @@ fn independent_metadata_goldens() {
 #[path = "../../../test-support/mod.rs"]
 mod support;
 use crabber::{
-    Agent, FakeProvider, PermissionDecision, StaticPolicy,
-    core::{RunStatus, ToolCallStatus},
+    Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
     session::MemoryStore,
 };
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -354,6 +341,7 @@ async fn interrupted_move_leaves_one_name() {
     Arc::get_mut(&mut o).unwrap().pre_write = Some(hook);
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             support::turn("file_move", json!({"path":"source","new_path":"target"})),
@@ -361,7 +349,7 @@ async fn interrupted_move_leaves_one_name() {
         ])))
         .config(support::config(temp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(fileops::file_move::definition(o.clone()))
+        .shared_tool(fileops::file_move::definition(o.clone()))
         .build()
         .unwrap();
     let run = agent.prompt(None, "move").await.unwrap();
@@ -370,10 +358,10 @@ async fn interrupted_move_leaves_one_name() {
         .await
         .unwrap();
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         support::calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     assert!(temp.path().join("target").exists());
     assert!(temp.path().join("source").exists());
@@ -554,3 +542,7 @@ async fn panicking_move_hook_reports_state_and_releases_guards() {
         );
     }
 }
+
+use support::context;
+
+use support::ExecuteOwned as _;

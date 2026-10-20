@@ -41,10 +41,12 @@ fn deep_glob_worker() {
         .build()
         .unwrap();
     let result = runtime
-        .block_on(tool.executor.execute_with_context(
+        .block_on(tool.executor.execute_owned_context(
             support::context(&root, CancellationToken::new()),
             json!({"pattern":"**", "limit":5000}),
         ))
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["outcome"], "succeeded");
     assert_eq!(result["paths"].as_array().unwrap().len(), 1500);
@@ -59,3 +61,5 @@ fn deep_glob_worker() {
         leaf.pop();
     }
 }
+
+use support::ExecuteOwned as _;

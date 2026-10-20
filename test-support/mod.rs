@@ -12,12 +12,13 @@ use tokio_util::sync::CancellationToken;
 pub fn context(
     root: &crabber_tools_core::WorkspaceRoot,
     cancel: CancellationToken,
-) -> crabber::extension::ToolContext {
+) -> OwnedContext {
     use crabber::{
         core::{RunId, ToolCallId},
         extension::{HostServices, ToolContext, WorkspaceContext},
     };
-    ToolContext::new(
+    let owner = crabber::extension::ToolResourceOwner::new();
+    let context = ToolContext::new(
         SessionId::new(),
         RunId::new(),
         ToolCallId::new(),
@@ -25,8 +26,9 @@ pub fn context(
         HostServices::default(),
         WorkspaceContext::from_persisted("test", root.path().to_str().unwrap()),
         Arc::new(|_| {}),
-        None,
     )
+    .with_resources(owner.resources());
+    OwnedContext { context, owner }
 }
 pub fn limits() -> crabber_tools_core::Limits {
     crabber_tools_core::Limits {
@@ -72,8 +74,8 @@ pub async fn calls(store: &MemoryStore, id: &SessionId) -> Vec<ToolCallRecord> {
                 messages: 100,
                 tool_calls: 100,
                 parts: 100,
-                text_bytes: 1_000_000,
-                encoded_bytes: 2_000_000,
+                text_bytes: 8_000_000,
+                encoded_bytes: 16_000_000,
             },
             continuation: None,
         })
@@ -98,11 +100,12 @@ pub async fn execute(root: &std::path::Path, tool: Arc<ToolDefinition>, args: Va
         done(),
     ]));
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(provider)
         .config(config(root))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(tool)
+        .shared_tool(tool)
         .build()
         .unwrap();
     let run = agent.prompt(None, "test").await.unwrap();
@@ -162,3 +165,109 @@ pub fn script(path: &std::path::Path, text: &str) {
 pub fn match_line() -> String {
     json!({"type":"match","data":{"path":{"text":"fixture"},"line_number":1,"lines":{"text":"hello\n"},"submatches":[{"match":{"text":"hello"},"start":0,"end":5}]}}).to_string()
 }
+
+pub fn value_of(output: &crabber::core::ToolOutput) -> Value {
+    output.json_value().unwrap()
+}
+
+pub fn admission_options(agent: &Agent, text: &str) -> crabber::core::AdmissionOptions {
+    crabber::core::AdmissionOptions {
+        key: crabber::core::AdmissionKey::new(crabber::core::ControlId::new().0).unwrap(),
+        fingerprint: crabber::core::InputFingerprint::new(crabber_tools_core::config_hash(&text))
+            .unwrap(),
+        behavior_fingerprint: agent.behavior_fingerprint().clone(),
+    }
+}
+pub fn execution(
+    session: SessionId,
+    workspace: &str,
+    directory: &std::path::Path,
+) -> crabber::ExecutionContext {
+    let directory = if directory.as_os_str().is_empty() {
+        std::path::PathBuf::new()
+    } else {
+        directory.canonicalize().expect("fixture workspace exists")
+    };
+    crabber::ExecutionContext::new(
+        crabber::SessionContext::new(session, workspace, directory.to_str().unwrap()),
+        Selection {
+            provider_id: "fake".into(),
+            model_id: "scripted".into(),
+        },
+    )
+}
+pub async fn admit(
+    agent: &Agent,
+    execution: &crabber::ExecutionContext,
+    text: &str,
+) -> crabber::RunHandle {
+    match agent
+        .prompt_keyed_in(execution, text, admission_options(agent, text), None)
+        .await
+        .unwrap()
+    {
+        crabber::Admission::Started { handle, .. } => handle,
+        crabber::Admission::Replayed(_) => panic!("fresh admission replayed"),
+    }
+}
+
+pub async fn assert_stopped_uncertain(run: crabber::RunHandle, store: &MemoryStore) {
+    let id = run.run_id().clone();
+    let crabber::RuntimeError::PhaseOutcomeUnknown { phase, reason, .. } =
+        run.done().await.unwrap_err()
+    else {
+        panic!("interrupted native phase must remain uncertain")
+    };
+    assert_eq!(reason, crabber::session::PhaseError::Uncertain);
+    let saved = store.tool_phase(&id, &phase.id).await.unwrap().phase;
+    assert_eq!(saved.state, crabber::session::PhaseState::Uncertain);
+}
+
+/// Direct-call fixture keeps a close capability for the entire invocation.
+pub struct OwnedContext {
+    context: crabber::extension::ToolContext,
+    owner: crabber::extension::ToolResourceOwner,
+}
+impl std::ops::Deref for OwnedContext {
+    type Target = crabber::extension::ToolContext;
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
+}
+impl OwnedContext {
+    /// Explicit lifecycle tests retain and drain the supplied owner themselves.
+    pub fn with_resources(
+        self,
+        resources: crabber::extension::ToolResources,
+    ) -> crabber::extension::ToolContext {
+        self.context.clone().with_resources(resources)
+    }
+}
+impl Drop for OwnedContext {
+    fn drop(&mut self) {
+        self.owner.close();
+    }
+}
+/// Ordinary direct-executor tests must observe the actual cleanup join.
+#[async_trait::async_trait]
+pub trait ExecuteOwned: crabber::ToolExecutor {
+    async fn execute_owned_context(
+        &self,
+        fixture: OwnedContext,
+        args: Value,
+    ) -> Result<crabber::core::ToolOutput, crabber::ExtensionError> {
+        let result = self
+            .execute_with_context(fixture.context.clone(), args)
+            .await;
+        let drain = fixture.owner.drain(Duration::from_secs(2)).await;
+        assert!(drain.sealed);
+        assert_eq!(drain.pending, 0, "direct executor left pending resources");
+        assert!(
+            drain.failures.is_empty(),
+            "direct executor cleanup failed: {:?}",
+            drain.failures
+        );
+        result
+    }
+}
+impl<T: crabber::ToolExecutor + ?Sized> ExecuteOwned for T {}

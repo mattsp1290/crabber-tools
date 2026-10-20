@@ -327,11 +327,13 @@ async fn total_timeout_includes_dns_and_releases_capacity() {
     let root = tempfile::tempdir().unwrap();
     let tool = tool(root.path());
     let result = tool
-        .execute_with_context(
+        .execute_owned_context(
             support::context(&tool.options.root, CancellationToken::new()),
             json!({"url":"https://example.com/"}),
         )
         .await
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["error"]["category"], "timeout");
     assert_eq!(TIMEOUT, Duration::from_secs(30));
@@ -349,7 +351,7 @@ async fn cancellation_during_dns_returns_executor_error_and_releases_capacity() 
     let tool = tool(root.path());
     let cancel = CancellationToken::new();
     let ctx = support::context(&tool.options.root, cancel.clone());
-    let work = tool.execute_with_context(ctx, json!({"url":"https://example.com/"}));
+    let work = tool.execute_owned_context(ctx, json!({"url":"https://example.com/"}));
     tokio::pin!(work);
     tokio::select! { biased; result = &mut work => panic!("unexpected result: {result:?}"), _ = tokio::task::yield_now() => {} }
     cancel.cancel();
@@ -455,11 +457,13 @@ async fn response_body_and_delayed_redirect_share_total_deadline() {
         tool.transport = transport.clone();
         let start = tokio::time::Instant::now();
         let result = tool
-            .execute_with_context(
+            .execute_owned_context(
                 support::context(&tool.options.root, CancellationToken::new()),
                 json!({"url":"https://example.com/"}),
             )
             .await
+            .unwrap()
+            .json_value()
             .unwrap();
         assert_eq!(result["error"]["category"], "timeout");
         assert_eq!(start.elapsed(), TIMEOUT);
@@ -480,7 +484,7 @@ async fn cancellation_drops_streaming_body_and_recovers_capacity() {
     let transport = body_transport(false);
     tool.transport = transport.clone();
     let cancel = CancellationToken::new();
-    let work = tool.execute_with_context(
+    let work = tool.execute_owned_context(
         support::context(&tool.options.root, cancel.clone()),
         json!({"url":"https://example.com/"}),
     );
@@ -532,3 +536,5 @@ async fn special_purpose_dns_and_prefix_boundaries() {
             .unwrap();
     }
 }
+
+use support::ExecuteOwned as _;
