@@ -183,6 +183,11 @@ pub fn execution(
     workspace: &str,
     directory: &std::path::Path,
 ) -> crabber::ExecutionContext {
+    let directory = if directory.as_os_str().is_empty() {
+        std::path::PathBuf::new()
+    } else {
+        directory.canonicalize().expect("fixture workspace exists")
+    };
     crabber::ExecutionContext::new(
         crabber::SessionContext::new(session, workspace, directory.to_str().unwrap()),
         Selection {

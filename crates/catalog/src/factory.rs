@@ -1,11 +1,11 @@
 //! Workspace-scoped standard-tool construction through host admission.
-use crate::{Policies, StandardTools, metadata};
+use crate::{Policies, StandardTools};
 use async_trait::async_trait;
 use crabber::{
     ExtensionError,
     extension::{ComponentIdentity, Extension, ExtensionFactory, FactoryContext, FactoryScope},
 };
-use crabber_tools_core::{CONFIG_IDENTITY_VERSION, WorkspaceAdmission, config_hash};
+use crabber_tools_core::WorkspaceAdmission;
 use std::sync::Arc;
 
 /// One logical registration, with independent tool resources per workspace.
@@ -21,23 +21,7 @@ impl StandardToolsFactory {
         admission: Arc<dyn WorkspaceAdmission>,
     ) -> Result<Self, ExtensionError> {
         policies.validate()?;
-        let identities: Vec<_> = metadata()
-            .into_iter()
-            .filter(|(id, _, _)| policies.enabled.contains(*id))
-            .map(|(id, _, hash)| (id.id(), hash))
-            .collect();
-        let hash = config_hash(&(
-            CONFIG_IDENTITY_VERSION,
-            env!("CARGO_PKG_VERSION"),
-            identities,
-            &policies.shell,
-            &policies.search,
-            &policies.url_fetch,
-            &policies.tracker,
-            &policies.user_interact,
-            &policies.limits,
-            policies.restrict_to_enabled,
-        ));
+        let hash = policies.config_identity();
         Ok(Self {
             policies,
             admission,

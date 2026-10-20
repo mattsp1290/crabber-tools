@@ -78,6 +78,9 @@ fn selection() -> Selection {
     }
 }
 fn context(id: &str, directory: &std::path::Path) -> ExecutionContext {
+    let directory = directory
+        .canonicalize()
+        .expect("host fixture workspace exists");
     ExecutionContext::new(
         SessionContext::new(SessionId::new(), id, directory.to_str().unwrap()),
         Selection {

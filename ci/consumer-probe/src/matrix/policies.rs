@@ -36,35 +36,74 @@ pub(super) fn policies(enabled: EnabledSet) -> Result<Policies, Box<dyn std::err
         },
     })
 }
+
+#[derive(Clone)]
+struct Scenario {
+    name: &'static str,
+    enabled: &'static [ToolId],
+    restrict: bool,
+    permission: PermissionDecision,
+    command: &'static str,
+    shell_status: ToolCallStatus,
+    marker_status: ToolCallStatus,
+    stdout: Option<&'static str>,
+    absent: Option<&'static str>,
+}
+fn scenarios() -> [Scenario; 4] {
+    let subset = Scenario {
+        name: "enabled-subset",
+        enabled: &[ToolId::FileRead],
+        restrict: false,
+        permission: PermissionDecision::Allow,
+        command: "printf 12345678901234567890",
+        shell_status: ToolCallStatus::Failed,
+        marker_status: ToolCallStatus::Completed,
+        stdout: None,
+        absent: None,
+    };
+    let restricted = Scenario {
+        name: "run-wide-restriction",
+        restrict: true,
+        marker_status: ToolCallStatus::Failed,
+        ..subset.clone()
+    };
+    let capped = Scenario {
+        name: "capped-output",
+        enabled: &[ToolId::FileRead, ToolId::Shell, ToolId::UrlFetch],
+        shell_status: ToolCallStatus::Completed,
+        stdout: Some("1234567890123456"),
+        ..subset.clone()
+    };
+    let denied = Scenario {
+        name: "host-denial",
+        permission: PermissionDecision::Deny,
+        command: "touch forbidden",
+        shell_status: ToolCallStatus::Failed,
+        stdout: None,
+        absent: Some("forbidden"),
+        ..capped.clone()
+    };
+    [subset, restricted, capped, denied]
+}
 pub(super) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let a = tempfile::tempdir()?;
     let b = tempfile::tempdir()?;
     for root in [a.path(), b.path()] {
         std::fs::write(root.join("x"), "owned")?;
     }
-    for mode in 0..4 {
+    for case in scenarios() {
         let store = Arc::new(MemoryStore::new());
-        let mut p = policies(if mode < 2 {
-            EnabledSet::only([ToolId::FileRead])
-        } else {
-            EnabledSet::only([ToolId::FileRead, ToolId::Shell, ToolId::UrlFetch])
-        })?;
-        p.restrict_to_enabled = mode == 1;
+        let mut p = policies(EnabledSet::only(case.enabled.iter().copied()))?;
+        p.restrict_to_enabled = case.restrict;
+        let include_url = p.enabled.contains(ToolId::UrlFetch);
         let script = (0..2)
             .flat_map(|_| {
                 let mut turns = vec![
-                    turn(
-                        "shell",
-                        if mode == 3 {
-                            json!({"cmd":"touch forbidden"})
-                        } else {
-                            json!({"cmd":"printf 12345678901234567890"})
-                        },
-                    ),
+                    turn("shell", json!({"cmd":case.command})),
                     turn("file_read", json!({"path":"x"})),
                     turn("consumer_marker", json!({})),
                 ];
-                if mode >= 2 {
+                if include_url {
                     turns.push(turn("url_fetch", json!({"url":"https://example.com/"})));
                 }
                 turns.push(done());
@@ -75,12 +114,8 @@ pub(super) async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ("a".into(), a.path().canonicalize()?),
             ("b".into(), b.path().canonicalize()?),
         ])?;
-        let permission = if mode == 3 {
-            StaticPolicy::new(PermissionDecision::Allow)
-                .with_rule("shell", PermissionDecision::Deny)
-        } else {
-            StaticPolicy::new(PermissionDecision::Allow)
-        };
+        let permission = StaticPolicy::new(PermissionDecision::Allow)
+            .with_rule("shell", case.permission.clone());
         let agent = Agent::builder()
             .behavior_version("consumer-policies/0.4.0")
             .store(store.clone())
@@ -95,8 +130,9 @@ pub(super) async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .build()?;
         for (workspace, root) in [("a", a.path()), ("b", b.path())] {
             let session = SessionId::new();
+            let directory = root.canonicalize()?;
             let ctx = ExecutionContext::new(
-                SessionContext::new(session.clone(), workspace, root.to_str().unwrap()),
+                SessionContext::new(session.clone(), workspace, directory.to_str().unwrap()),
                 Selection {
                     provider_id: "fake".into(),
                     model_id: "scripted".into(),
@@ -116,30 +152,24 @@ pub(super) async fn run() -> Result<(), Box<dyn std::error::Error>> {
             handle.done().await?;
             let records = results(&*store, &session).await?;
             assert_eq!(
-                records[0].status,
-                if mode == 2 {
-                    ToolCallStatus::Completed
-                } else {
-                    ToolCallStatus::Failed
-                }
+                records[0].status, case.shell_status,
+                "{} in {}",
+                case.name, workspace
             );
-            if mode == 2 {
-                assert_eq!(value(&records[0])["stdout"], "1234567890123456");
+            if let Some(stdout) = case.stdout {
+                assert_eq!(value(&records[0])["stdout"], stdout);
                 assert_eq!(value(&records[0])["stdout_truncated"], true);
             }
             assert_eq!(value(&records[1])["content"], "owned");
             assert_eq!(
-                records[2].status,
-                if mode == 1 {
-                    ToolCallStatus::Failed
-                } else {
-                    ToolCallStatus::Completed
-                }
+                records[2].status, case.marker_status,
+                "{} in {}",
+                case.name, workspace
             );
-            if mode == 3 {
-                assert!(!root.join("forbidden").exists());
+            if let Some(absent) = case.absent {
+                assert!(!root.join(absent).exists());
             }
-            if mode >= 2 {
+            if include_url {
                 assert_eq!(records[3].status, ToolCallStatus::Failed);
                 assert_eq!(value(&records[3])["error"]["category"], "validation");
             }

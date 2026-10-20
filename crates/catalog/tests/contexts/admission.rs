@@ -207,3 +207,39 @@ async fn custom_admission_directory_mismatch_fails_before_execution() {
     assert!(!b.path().join("never").exists());
     agent.close_extensions().await.unwrap();
 }
+
+#[tokio::test]
+async fn symlinked_host_root_persists_the_admitted_canonical_directory() {
+    let _cwd = Cwd::new();
+    let parent = tempfile::tempdir().unwrap();
+    let real = parent.path().join("real");
+    let alias = parent.path().join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let (agent, store) = agent(
+        &alias,
+        b.path(),
+        base(),
+        vec![
+            turn("file_write", json!({"path":"owned","content":"correct"})),
+            done(),
+        ],
+        allow(),
+    );
+    let ctx = execution(SessionId::new(), "ws-a", &alias);
+    assert_eq!(
+        ctx.session().directory(),
+        real.canonicalize().unwrap().to_str().unwrap()
+    );
+    admit(&agent, &ctx, "canonical").await.done().await.unwrap();
+    assert_eq!(
+        calls(&store, ctx.session().session_id()).await[0].status,
+        ToolCallStatus::Completed
+    );
+    assert_eq!(
+        std::fs::read_to_string(real.join("owned")).unwrap(),
+        "correct"
+    );
+    agent.close_extensions().await.unwrap();
+}

@@ -176,23 +176,7 @@ impl StandardTools {
         if definitions.is_empty() {
             return Err(ExtensionError::Plan("enabled set is empty".into()));
         }
-        let identities: Vec<_> = definitions
-            .iter()
-            .map(|d| (d.id.id(), &d.schema_hash))
-            .collect();
-        let hash = config_hash(&(
-            CONFIG_IDENTITY_VERSION,
-            env!("CARGO_PKG_VERSION"),
-            identities,
-            &options.shell,
-            &options.search,
-            &options.url_fetch,
-            &options.tracker,
-            &options.user_interact,
-            &options.limits,
-            root.path(),
-            options.restrict_to_enabled,
-        ));
+        let hash = config_hash(&(options.config_identity(), root.path()));
         Ok(Self {
             definitions,
             hash,
@@ -227,6 +211,28 @@ impl Extension for StandardTools {
 }
 
 impl Policies {
+    // One owner for the root-free fingerprint contract. Both mounting paths use
+    // identical enabled schemas and policy inputs; shared mounts additionally bind root.
+    pub(crate) fn config_identity(&self) -> String {
+        let identities: Vec<_> = metadata()
+            .into_iter()
+            .filter(|(id, _, _)| self.enabled.contains(*id))
+            .map(|(id, _, hash)| (id.id(), hash))
+            .collect();
+        config_hash(&(
+            CONFIG_IDENTITY_VERSION,
+            env!("CARGO_PKG_VERSION"),
+            identities,
+            &self.shell,
+            &self.search,
+            &self.url_fetch,
+            &self.tracker,
+            &self.user_interact,
+            &self.limits,
+            self.restrict_to_enabled,
+        ))
+    }
+
     /// Validate all configured policies, including optional disabled-tool policies.
     pub fn validate(&self) -> Result<(), ExtensionError> {
         self.shell.validate()?;
