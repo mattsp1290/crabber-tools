@@ -1,6 +1,6 @@
 # eino-tools parity
 
-Version 0.2.0 mounts the eleven tools from eino-tools `catalog.Standard` at
+Version 0.2.0 established parity with the eleven tools from eino-tools `catalog.Standard` at
 `c0975d6764b2536faf639efe516a79de6154a55d`. Parity means tool names, schemas and
 retry_safe declarations modulo the exact allowlist, plus the runtime contracts
 mapped below. Runtime corpus parity is proved for apply_patch and user_interact;
@@ -177,7 +177,13 @@ boundary are D14/D15. Pending is a relay (D16). All outcomes remain non-retry-sa
 
 ## Beyond parity
 
-`multi_edit`, `file_delete` and `file_move` are planned for release 0.3.0 and have no eino-tools counterpart.
+| Tool | Reason | Upstream |
+| --- | --- | --- |
+| `multi_edit` | Ordered edits in a single atomic write | eino-tools has no counterpart |
+| `file_delete` | Explicit regular-file removal | eino-tools has no counterpart |
+| `file_move` | Preserve inode without overwriting destination | eino-tools has no counterpart |
+
+`multi_edit`, `file_delete` and `file_move` are included in release 0.3.0 and have no eino-tools counterpart.
 
 ## How parity is verified
 

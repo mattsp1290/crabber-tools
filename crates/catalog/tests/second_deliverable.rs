@@ -117,7 +117,7 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
         assert_ne!(hash, StandardTools::new(o).unwrap().config_hash());
     }
     let tools = StandardTools::new(options(root.path(), hub.path())).unwrap();
-    assert_eq!(tools.definitions().len(), 11);
+    assert_eq!(tools.definitions().len(), 14);
     assert_eq!(
         tools.definitions().iter().map(|d| d.id).collect::<Vec<_>>(),
         ToolId::ALL
@@ -132,7 +132,7 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
     assert_eq!(StandardTools::new(parity).unwrap().definitions().len(), 11);
 }
 #[tokio::test]
-async fn all_parity_tools_execute_on_one_agent_without_network_or_real_hub() {
+async fn all_tools_execute_on_one_agent_without_network_or_real_hub() {
     let root = tempfile::tempdir().unwrap();
     let hub = tempfile::tempdir().unwrap();
     let o = options(root.path(), hub.path());
@@ -150,13 +150,23 @@ async fn all_parity_tools_execute_on_one_agent_without_network_or_real_hub() {
         turn("url_fetch",json!({"url":file_url})),
         turn("tracker_write",json!({"op":"comment","id":"demo-ab12","body":"done"})),
         turn("user_interact",json!({"question":"Continue?"})),
-        turn("user_interact",json!({"question":"Continue?","answer":"yes"})),done(),
+        turn("user_interact",json!({"question":"Continue?","answer":"yes"})),
+        turn("file_write",json!({"path":"extra.txt","content":"alpha"})),
+        turn("file_move",json!({"path":"extra.txt","new_path":"moved/extra.txt","create_dirs":true})),
+        turn("multi_edit",json!({"path":"moved/extra.txt","edits":[{"anchor":"alpha","replacement":"beta"}]})),
+        turn("file_delete",json!({"path":"moved/extra.txt"})),done(),
     ]))).config(config(root.path())).policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow))).extension(Arc::new(StandardTools::new(o).unwrap()),Scope::Global).build().unwrap();
     let run = agent.prompt(None, "parity tools").await.unwrap();
     let session = run.session_id().clone();
     run.done().await.unwrap();
     let records = calls(&store, &session).await;
-    assert_eq!(records.len(), 12);
+    assert_eq!(records.len(), 16);
+    assert!(!root.path().join("moved/extra.txt").exists());
+    assert!(root.path().join("moved").is_dir());
+    assert_eq!(
+        EnabledSet::eino_parity(),
+        EnabledSet::only(ToolId::EINO_PARITY)
+    );
     for r in &records {
         assert_eq!(r.status, crabber::core::ToolCallStatus::Completed, "{r:?}");
         let result = value(r);

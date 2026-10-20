@@ -39,6 +39,9 @@ pub fn metadata() -> Vec<(ToolId, ToolInfo, String)> {
                 ToolId::FileWrite => crabber_tools_fileops::write::info(),
                 ToolId::FileEdit => crabber_tools_fileops::edit::info(),
                 ToolId::FileList => crabber_tools_fileops::list::info(),
+                ToolId::MultiEdit => crabber_tools_fileops::multi_edit::info(),
+                ToolId::FileDelete => crabber_tools_fileops::file_delete::info(),
+                ToolId::FileMove => crabber_tools_fileops::file_move::info(),
                 ToolId::Search => crabber_tools_search::info(),
                 ToolId::Shell => crabber_tools_shell::info(),
                 ToolId::Glob => crabber_tools_glob::info(),
@@ -134,6 +137,13 @@ impl StandardTools {
                     ToolId::FileWrite => crabber_tools_fileops::write::definition(files.clone()),
                     ToolId::FileEdit => crabber_tools_fileops::edit::definition(files.clone()),
                     ToolId::FileList => crabber_tools_fileops::list::definition(files.clone()),
+                    ToolId::MultiEdit => {
+                        crabber_tools_fileops::multi_edit::definition(files.clone())
+                    }
+                    ToolId::FileDelete => {
+                        crabber_tools_fileops::file_delete::definition(files.clone())
+                    }
+                    ToolId::FileMove => crabber_tools_fileops::file_move::definition(files.clone()),
                     ToolId::Search => crabber_tools_search::definition(search.clone())?,
                     ToolId::Shell => crabber_tools_shell::definition(shell.clone())?,
                     ToolId::Glob => {

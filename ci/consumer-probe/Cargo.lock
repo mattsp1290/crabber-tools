@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-applypatch"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-catalog"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-core"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "cap-std",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-fileops"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -487,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-glob"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-search"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-shell"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-trackerwrite"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-urlfetch"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "crabber-tools-userinteract"
-version = "0.2.0"
+version = "0.3.0"
 source = "git+ssh://git@github.com/mattsp1290/crabber-tools.git?rev=CRABBER_TOOLS_REV#CRABBER_TOOLS_REV"
 dependencies = [
  "async-trait",
