@@ -261,14 +261,14 @@ async fn tracker_and_file_url_share_mount_capacity() {
     let task = tokio::spawn(async move {
         tracker
             .executor
-            .execute_with_context(ctx, json!({"op":"close","id":"demo-ab12"}))
+            .execute_owned_context(ctx, json!({"op":"close","id":"demo-ab12"}))
             .await
     });
     wait_file(&hub.path().join("started")).await;
     let args = json!({"url":url_from_path(&admitted.path().join("text"))});
     let result = url
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&admitted, tokio_util::sync::CancellationToken::new()),
             args.clone(),
         )
@@ -281,7 +281,7 @@ async fn tracker_and_file_url_share_mount_capacity() {
     assert!(task.await.unwrap().is_err());
     let result = url
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&admitted, tokio_util::sync::CancellationToken::new()),
             args,
         )
@@ -307,7 +307,7 @@ async fn file_url_encodes_special_path_characters() {
     let result = tools.definitions()[0]
         .definition
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&admitted, tokio_util::sync::CancellationToken::new()),
             json!({"url":url_from_path(&path)}),
         )

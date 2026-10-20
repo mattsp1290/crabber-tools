@@ -12,8 +12,9 @@ workspace share its capacity. Distinct workspace instances have independent
 capacity; writers at the same canonical root share a process-global lock. The
 factory hash covers policies and enabled schemas; a shared single-root instance's
 hash also includes its canonical path. Closing a session does not close its
-workspace owner. Close the workspace owner before remapping its ID or replacing
-its directory: a cached directory capability can still point at the old inode.
+workspace owner. A closed workspace ID cannot be re-admitted on the same Agent. To remap an ID
+or replace its directory, close the Agent extensions and build a new Agent with
+the updated admission table. A cached capability can still point at the old inode.
 
 Blocking closures and process tasks register before starting work. An ownerless,
 sealed or full resource scope returns `unavailable`. Blocking work retains its
@@ -59,3 +60,13 @@ crabber-btrf; this consumer makes no automatic same-original recovery promise.
 Questions and answers cross unredacted. Do not collect secrets. Hosts should
 mount tool_result_redactor; library-generated error messages contain neither host
 paths nor raw command output. All fixture hosts are scripted and use no credentials.
+
+Parallel siblings not yet started when another question suspends may run only
+after continuation. Hosts must answer the current snapshot, continue, and repeat
+while the run returns Paused. Every question must settle exactly once across these
+pauses. Interruption may hide an already completed blocking effect, so reconcile
+the durable phase and observed effects rather than blindly retrying.
+
+SQLite reopen qualification lives in the standalone consumer to avoid adding
+SQLite features to every workspace test. CI runs it on push only when the
+CONSUMER_PROBE repository variable is true; local qualification must run it too.

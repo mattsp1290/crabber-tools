@@ -18,7 +18,9 @@ impl Cwd {
 }
 impl Drop for Cwd {
     fn drop(&mut self) {
-        assert_eq!(std::env::current_dir().unwrap(), self.0);
+        if !std::thread::panicking() {
+            assert_eq!(std::env::current_dir().unwrap(), self.0);
+        }
     }
 }
 fn policies() -> Policies {

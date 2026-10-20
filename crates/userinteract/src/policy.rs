@@ -27,7 +27,7 @@ impl Serialize for Surface {
         match self {
             Self::Pending => serializer.serialize_str("pending"),
             Self::Durable { authority, expires_after } => {
-                serde_json::json!({"durable":{"policy_id":authority.policy_id(), "policy_version":authority.policy_version(), "expires_after_ms":expires_after.map(|d| d.as_millis())}}).serialize(serializer)
+                serde_json::json!({"durable":{"policy_id":authority.policy_id(), "policy_version":authority.policy_version(), "expires_after_ms":expires_after.map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))}}).serialize(serializer)
             }
         }
     }

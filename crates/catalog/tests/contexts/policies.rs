@@ -62,7 +62,7 @@ async fn host_deny_policy_applies_in_every_workspace() {
         assert_eq!(records[0].status, ToolCallStatus::Failed);
         assert_eq!(records[1].status, ToolCallStatus::Completed);
         assert_eq!(value(&records[1])["content"], "owned");
-        assert!(!root.join("validation").exists());
+        assert!(!root.join("forbidden").exists());
     }
     agent.close_extensions().await.unwrap();
 }

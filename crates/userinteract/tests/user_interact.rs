@@ -18,7 +18,7 @@ async fn invoke(
     let dir = tempfile::tempdir().unwrap();
     let root = WorkspaceRoot::open(dir.path()).unwrap();
     t.executor
-        .execute_with_context(support::context(&root, cancel), args)
+        .execute_owned_context(support::context(&root, cancel), args)
         .await
         .map(|out| out.json_value().unwrap())
 }
@@ -213,4 +213,19 @@ fn durable_bounds_and_identity() {
             AuthorityRequirement::new("other", "1").unwrap()
         ))
     );
+}
+
+use support::ExecuteOwned as _;
+
+#[test]
+fn unvalidated_large_expiry_serializes_without_panicking() {
+    let mut policy = UserInteractPolicy::durable(
+        crabber::core::AuthorityRequirement::new("operator", "1").unwrap(),
+    );
+    policy.surface = Surface::Durable {
+        authority: crabber::core::AuthorityRequirement::new("operator", "1").unwrap(),
+        expires_after: Some(std::time::Duration::MAX),
+    };
+    assert!(serde_json::to_value(&policy).is_ok());
+    assert!(policy.validate().is_err());
 }

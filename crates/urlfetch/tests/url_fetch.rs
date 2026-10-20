@@ -19,7 +19,7 @@ async fn call(o: &Arc<Options>, value: Value) -> Value {
     definition(o.clone())
         .unwrap()
         .executor
-        .execute_with_context(support::context(&o.root, CancellationToken::new()), value)
+        .execute_owned_context(support::context(&o.root, CancellationToken::new()), value)
         .await
         .unwrap()
         .json_value()
@@ -149,7 +149,7 @@ async fn validation_cancellation_and_workspace_routing_fail_closed() {
         definition(o.clone())
             .unwrap()
             .executor
-            .execute_with_context(
+            .execute_owned_context(
                 support::context(&o.root, cancel),
                 json!({"url":file(&canonical_root.as_path().join("missing"))})
             )
@@ -187,3 +187,5 @@ fn upstream_and_documented_metadata_match() {
         ["network.http.fetch", "workspace.fs.read"]
     );
 }
+
+use support::ExecuteOwned as _;

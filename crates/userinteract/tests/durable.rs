@@ -88,12 +88,23 @@ async fn paused(agent: &Agent, store: &MemoryStore) -> ToolContinuationSnapshot 
     let run = handle.run_id().clone();
     assert_eq!(handle.done().await.unwrap().status, RunStatus::Paused);
     let records = calls(store, &session).await;
-    assert!(records.iter().all(|r| r.status == ToolCallStatus::Waiting));
-    agent
+    let snapshot = agent
         .tool_continuation_snapshot(&session, &run)
         .await
         .unwrap()
-        .unwrap()
+        .unwrap();
+    assert!(!snapshot.interactions.is_empty());
+    for question in &snapshot.interactions {
+        assert_eq!(
+            records
+                .iter()
+                .find(|r| r.id == question.call_id)
+                .unwrap()
+                .status,
+            ToolCallStatus::Waiting
+        );
+    }
+    snapshot
 }
 #[tokio::test]
 async fn durable_question_pauses_and_resumes_once() {
@@ -184,64 +195,6 @@ async fn denied_cancelled_expired_are_error_results() {
     }
 }
 #[tokio::test]
-async fn parallel_questions_resume_together() {
-    let root = tempfile::tempdir().unwrap();
-    let store = Arc::new(MemoryStore::new());
-    let mut batch = turn("user_interact", json!({"question":"First?"}));
-    batch.pop();
-    batch.extend(turn("user_interact", json!({"question":"Second?"})));
-    let agent = agent(
-        root.path(),
-        store.clone(),
-        Arc::new(FakeProvider::scripted(vec![batch, done()])),
-        UserInteractPolicy::durable(authority()),
-    );
-    let snapshot = paused(&agent, &store).await;
-    assert_eq!(snapshot.interactions.len(), 2);
-    let first = agent
-        .answer_tool_interaction(answer(
-            &snapshot,
-            0,
-            ToolInteractionReply::Answer {
-                value: json!("one"),
-            },
-        ))
-        .await
-        .unwrap();
-    let premature = ContinueTool {
-        id: ControlId::new(),
-        session_id: snapshot.session_id.clone(),
-        run_id: snapshot.run_id.clone(),
-        continuation: snapshot.continuation.clone(),
-        expected_revision: first.revision,
-    };
-    assert!(agent.continue_tool(premature).await.is_err());
-    let fresh = agent
-        .tool_continuation_snapshot(&snapshot.session_id, &snapshot.run_id)
-        .await
-        .unwrap()
-        .unwrap();
-    let second = agent
-        .answer_tool_interaction(answer(
-            &fresh,
-            1,
-            ToolInteractionReply::Answer {
-                value: json!("two"),
-            },
-        ))
-        .await
-        .unwrap();
-    resume(&agent, &fresh, second.revision).await;
-    let records = calls(&store, &snapshot.session_id).await;
-    assert_eq!(records.len(), 2);
-    assert!(
-        records
-            .iter()
-            .all(|r| r.status == ToolCallStatus::Completed)
-    );
-    agent.close_extensions().await.unwrap();
-}
-#[tokio::test]
 async fn model_supplied_answer_is_rejected_without_pause() {
     let root = tempfile::tempdir().unwrap();
     let store = Arc::new(MemoryStore::new());
@@ -271,3 +224,6 @@ mod restart;
 
 #[path = "durable/compatibility.rs"]
 mod compatibility;
+
+#[path = "durable/parallel.rs"]
+mod parallel;

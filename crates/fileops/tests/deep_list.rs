@@ -42,7 +42,7 @@ fn deep_listing_worker() {
         .build()
         .unwrap();
     let result = runtime
-        .block_on(tool.executor.execute_with_context(
+        .block_on(tool.executor.execute_owned_context(
             support::context(&root, CancellationToken::new()),
             json!({"recursive":true}),
         ))
@@ -62,3 +62,5 @@ fn deep_listing_worker() {
         leaf.pop();
     }
 }
+
+use support::ExecuteOwned as _;

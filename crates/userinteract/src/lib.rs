@@ -75,7 +75,10 @@ impl UserTool {
                 Ok(json!({"outcome":"succeeded","answer":args.answer}))
             }
             Surface::Pending => Ok(json!({"outcome":"pending","question":args.question})),
-            Surface::Durable { .. } => unreachable!("durable tools use resumable registration"),
+            Surface::Durable { .. } => Ok(failed(
+                category::UNKNOWN,
+                "durable surface requires resumable registration",
+            )),
         }
     }
 }

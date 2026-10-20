@@ -48,9 +48,9 @@ mounts. Use `shared_extension` for a single admitted root or `StandardToolsFacto
 with host-owned admission for multiple workspaces. Two shared roots still collide
 on tool names. Missing session directory returns `workspace_mismatch` for every
 workspace tool, including URL fetch and tracker writes. Factory admission also
-requires a workspace ID. An owner is cached once per workspace ID: after remapping
-or replacing its directory, call `close_workspace_resources` before admitting it
-again. Capacity is shared within that workspace instance, so one session may use
+requires a workspace ID. An owner is cached once per workspace ID: after closing that owner, the same Agent refuses new admissions for that
+workspace ID. To remap or replace its directory, close the Agent extensions and
+build a new Agent with the updated admission table. Capacity is shared within that workspace instance, so one session may use
 another's slots within the configured bound. Writer locks share the canonical root
 across all instances. The factory configuration hash covers policies and enabled
 schemas; the per-instance hash also includes the root. Root authorization comes
@@ -665,7 +665,8 @@ A model-supplied answer, relay echo, timeout or reconnect is never a human decis
 
 `UserInteractPolicy::durable(authority)` uses a `ResumableTool`. The host reads
 `tool_continuation_snapshot`, authenticates the resolver, records
-`answer_tool_interaction`, then invokes `continue_tool`. Answered strings have
+`answer_tool_interaction`, then invokes `continue_tool`, repeating while the run is Paused. Parallel siblings
+that had not started at suspension may produce a later pause. Answered strings have
 trailing newlines trimmed; empty answers omit the answer key. Recorded Deny,
 Cancel and Expire become failed results with `denied`, `cancelled` and `timeout`
 respectively. These host decisions differ from executor cancellation. The runtime
@@ -675,7 +676,9 @@ response schema before delivering accepted responses to the tool.
 Durable answers default to and cannot exceed `MAX_DURABLE_ANSWER_BYTES` (8192).
 The response schema's maxLength counts code points; resume also checks UTF-8 byte
 length. A schema-accepted oversized byte string therefore returns `too_large`.
-The pending relay's maximum answer remains 1 MiB. All bounds participate in
+Hosts must check UTF-8 byte length before recording an answer: an oversized
+schema-accepted string produces a terminal too_large result, so that question
+cannot be re-answered. The pending relay's maximum answer remains 1 MiB. All bounds participate in
 configuration identity; changing authority or bounds refuses old continuations.
 
 `expires_after` is evaluated by the store clock; the run stays Paused until the

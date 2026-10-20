@@ -27,7 +27,7 @@ async fn call(options: Options, args: Value) -> Value {
     definition(Arc::new(options))
         .unwrap()
         .executor
-        .execute_with_context(context(&root, CancellationToken::new()), args)
+        .execute_owned_context(context(&root, CancellationToken::new()), args)
         .await
         .unwrap()
         .json_value()
@@ -134,7 +134,7 @@ async fn environment_and_policy_construction() {
         definition(Arc::new(o))
             .unwrap()
             .executor
-            .execute_with_context(
+            .execute_owned_context(
                 context(&root, cancel),
                 json!({"cmd":"touch must-not-exist"})
             )

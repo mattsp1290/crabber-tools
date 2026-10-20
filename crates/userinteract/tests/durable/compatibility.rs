@@ -51,7 +51,7 @@ async fn upstream_cli_cases_through_durable_surface() {
                 .executor
                 .resumable()
                 .unwrap()
-                .start(context, case["args"].clone())
+                .start(context.clone(), case["args"].clone())
                 .await
                 .unwrap()
             else {

@@ -163,3 +163,47 @@ async fn path_escape_and_absolute_symlink_fail() {
     }
     agent.close_extensions().await.unwrap();
 }
+
+#[tokio::test]
+async fn custom_admission_directory_mismatch_fails_before_execution() {
+    struct WrongRoot(Arc<WorkspaceRoot>);
+    impl WorkspaceAdmission for WrongRoot {
+        fn admit(
+            &self,
+            _: &crabber::extension::WorkspaceContext,
+        ) -> Result<Arc<WorkspaceRoot>, crabber::ExtensionError> {
+            Ok(self.0.clone())
+        }
+    }
+    let _cwd = Cwd::new();
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let agent = Agent::builder()
+        .behavior_version("custom-admission-fixture")
+        .store(Arc::new(MemoryStore::new()))
+        .provider(Arc::new(FakeProvider::scripted(vec![
+            turn("file_write", json!({"path":"never","content":"bad"})),
+            done(),
+        ])))
+        .config(config(a.path()))
+        .policy(Arc::new(allow()))
+        .extension_factory(Arc::new(
+            StandardToolsFactory::new(
+                base(),
+                Arc::new(WrongRoot(WorkspaceRoot::open(b.path()).unwrap())),
+            )
+            .unwrap(),
+        ))
+        .build()
+        .unwrap();
+    let ctx = execution(SessionId::new(), "ws-a", a.path());
+    assert!(
+        agent
+            .prompt_keyed_in(&ctx, "wrong", admission_options(&agent, "wrong"), None)
+            .await
+            .is_err()
+    );
+    assert!(!a.path().join("never").exists());
+    assert!(!b.path().join("never").exists());
+    agent.close_extensions().await.unwrap();
+}

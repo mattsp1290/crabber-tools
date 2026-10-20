@@ -53,7 +53,14 @@ pub(super) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let script = (0..2)
             .flat_map(|_| {
                 let mut turns = vec![
-                    turn("shell", json!({"cmd":"printf 12345678901234567890"})),
+                    turn(
+                        "shell",
+                        if mode == 3 {
+                            json!({"cmd":"touch forbidden"})
+                        } else {
+                            json!({"cmd":"printf 12345678901234567890"})
+                        },
+                    ),
                     turn("file_read", json!({"path":"x"})),
                     turn("consumer_marker", json!({})),
                 ];
@@ -129,6 +136,9 @@ pub(super) async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ToolCallStatus::Completed
                 }
             );
+            if mode == 3 {
+                assert!(!root.join("forbidden").exists());
+            }
             if mode >= 2 {
                 assert_eq!(records[3].status, ToolCallStatus::Failed);
                 assert_eq!(value(&records[3])["error"]["category"], "validation");

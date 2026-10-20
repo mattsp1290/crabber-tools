@@ -45,7 +45,7 @@ fn options(_path: &std::path::Path) -> Policies {
 fn metadata_parity_docs_hashes_and_prelude() {
     let first = metadata();
     assert_eq!(first, metadata());
-    // Hashes are appended in ToolId::ALL order; existing entries never change.
+    // Hashes follow ToolId::ALL order; deliberate metadata changes update the versioned entries.
     assert_eq!(ToolId::EINO_PARITY.len(), 11);
     assert!(
         ToolId::EINO_PARITY

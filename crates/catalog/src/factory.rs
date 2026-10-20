@@ -62,9 +62,20 @@ impl ExtensionFactory for StandardToolsFactory {
     async fn create(&self, context: FactoryContext) -> Result<Arc<dyn Extension>, ExtensionError> {
         let admission = self.admission.clone();
         let workspace = context.workspace().clone();
-        let root = tokio::task::spawn_blocking(move || admission.admit(&workspace))
-            .await
-            .map_err(|_| ExtensionError::Plan("workspace admission failed".into()))??;
+        let root = tokio::task::spawn_blocking(move || {
+            let root = admission.admit(&workspace)?;
+            if root
+                .matches_session_directory(workspace.directory())
+                .is_err()
+            {
+                return Err(ExtensionError::Plan(
+                    "admitted root does not match session directory".into(),
+                ));
+            }
+            Ok(root)
+        })
+        .await
+        .map_err(|_| ExtensionError::Plan("workspace admission failed".into()))??;
         Ok(Arc::new(StandardTools::new(root, self.policies.clone())?))
     }
 }

@@ -22,7 +22,7 @@ fn options(path: &std::path::Path) -> Arc<Options> {
 async fn call(o: &Arc<Options>, args: Value) -> Value {
     definition(o.clone())
         .executor
-        .execute_with_context(context(&o.root, CancellationToken::new()), args)
+        .execute_owned_context(context(&o.root, CancellationToken::new()), args)
         .await
         .unwrap()
         .json_value()
@@ -145,7 +145,7 @@ async fn capacity_and_agent_interruption() {
     assert!(
         definition(o.clone())
             .executor
-            .execute_with_context(context(&o.root, cancel), json!({"pattern":"**"}))
+            .execute_owned_context(context(&o.root, cancel), json!({"pattern":"**"}))
             .await
             .is_err()
     );
@@ -324,7 +324,7 @@ async fn pathological_pattern_worker() {
     ] {
         let result = crabber_tools_glob::definition(options.clone())
             .executor
-            .execute_with_context(
+            .execute_owned_context(
                 support::context(&options.root, tokio_util::sync::CancellationToken::new()),
                 serde_json::json!({"pattern":pattern}),
             )

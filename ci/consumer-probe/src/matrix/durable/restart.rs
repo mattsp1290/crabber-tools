@@ -18,58 +18,87 @@ pub(super) async fn restart(sqlite: bool) -> Result<(), Error> {
     batch.extend(turn("user_interact", json!({"question":"Second?"})));
     let provider = Arc::new(FakeProvider::scripted(vec![batch, done()]));
     let agent = host(root.path(), store.clone(), provider.clone(), policy())?;
-    let snapshot = paused(&agent).await?;
-    assert_eq!(snapshot.interactions.len(), 2);
+    let mut snapshot = paused(&agent).await?;
+    let session = snapshot.session_id.clone();
     let inode = std::fs::metadata(root.path().join("effect"))?.ino();
-    let first = agent
-        .answer_tool_interaction(answer(
-            &snapshot,
-            0,
-            ToolInteractionReply::Answer {
-                value: json!("one"),
-            },
-        ))
-        .await?;
-    assert!(
-        agent
-            .continue_tool(continuation(&snapshot, first.revision))
-            .await
-            .is_err()
-    );
-    let mut fresh = agent
-        .tool_continuation_snapshot(&snapshot.session_id, &snapshot.run_id)
-        .await?
-        .unwrap();
-    fresh.revision = first.revision;
-    let accepted = agent
-        .answer_tool_interaction(answer(
-            &fresh,
-            1,
-            ToolInteractionReply::Answer {
-                value: json!("two"),
-            },
-        ))
-        .await?;
-    agent.close_extensions().await?;
-    drop(agent);
-    let store = if sqlite {
-        drop(store);
-        Arc::new(SqliteStore::connect(&url).await?) as Arc<dyn Store>
-    } else {
-        store
-    };
-    let rebuilt = host(root.path(), store.clone(), provider, policy())?;
-    finish(&rebuilt, &snapshot, accepted.revision).await?;
+    let mut active = agent;
+    let mut reopened = false;
+    let mut answered = std::collections::BTreeSet::new();
+    let mut active_store = store;
+    loop {
+        assert!(!snapshot.interactions.is_empty());
+        let mut revision = snapshot.revision;
+        for (index, question) in snapshot.interactions.iter().enumerate() {
+            assert!(
+                answered.insert(question.call_id.to_string()),
+                "question answered twice"
+            );
+            let mut request = answer(
+                &snapshot,
+                index,
+                ToolInteractionReply::Answer {
+                    value: json!(question.description.prompt()),
+                },
+            );
+            request.expected_revision = revision;
+            revision = active.answer_tool_interaction(request).await?.revision;
+            if index + 1 < snapshot.interactions.len() {
+                assert!(
+                    active
+                        .continue_tool(continuation(&snapshot, revision))
+                        .await
+                        .is_err()
+                );
+            }
+        }
+        if !reopened {
+            active.close_extensions().await?;
+            drop(active);
+            if sqlite {
+                drop(active_store);
+                active_store = Arc::new(SqliteStore::connect(&url).await?);
+            }
+            active = host(
+                root.path(),
+                active_store.clone(),
+                provider.clone(),
+                policy(),
+            )?;
+            reopened = true;
+        }
+        let request = continuation(&snapshot, revision);
+        let ToolContinuation::Started { handle, .. } =
+            active.continue_tool(request.clone()).await?
+        else {
+            return Err("fresh continuation replayed".into());
+        };
+        let status = handle.done().await?.status;
+        assert!(matches!(
+            active.continue_tool(request).await?,
+            ToolContinuation::Replayed(_)
+        ));
+        if status == RunStatus::Completed {
+            break;
+        }
+        assert_eq!(status, RunStatus::Paused);
+        assert!(answered.len() < 2);
+        snapshot = active
+            .tool_continuation_snapshot(&snapshot.session_id, &snapshot.run_id)
+            .await?
+            .ok_or("missing next continuation")?;
+    }
+    assert_eq!(answered.len(), 2);
+    assert!(reopened);
     assert_eq!(std::fs::metadata(root.path().join("effect"))?.ino(), inode);
     assert_eq!(std::fs::read_to_string(root.path().join("effect"))?, "once");
-    let records = results(&*store, &snapshot.session_id).await?;
+    let records = results(&*active_store, &session).await?;
     assert_eq!(records.iter().filter(|r| r.name == "file_write").count(), 1);
     assert!(
         records
             .iter()
             .all(|r| r.status == ToolCallStatus::Completed)
     );
-    rebuilt.close_extensions().await?;
+    active.close_extensions().await?;
     check(if sqlite {
         "sqlite_reopen_parallel_resume_effect_once"
     } else {

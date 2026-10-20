@@ -116,6 +116,7 @@ pub fn category_for_io(error: &io::Error) -> &'static str {
 /// an unconfigured session directory or the process working directory.
 pub trait WorkspaceAdmission: Send + Sync {
     /// Admit a configured workspace, or return WorkspaceUnavailable / Plan.
+    /// Factories invoke this on the blocking pool; implementations may perform I/O.
     fn admit(
         &self,
         workspace: &crabber::extension::WorkspaceContext,
@@ -132,12 +133,16 @@ impl ExactRoots {
     ) -> Result<Self, ExtensionError> {
         let mut roots = std::collections::BTreeMap::new();
         for (id, path) in entries {
-            if id.is_empty()
-                || !path.is_absolute()
-                || path.to_str().is_none()
-                || roots.insert(id, path).is_some()
-            {
-                return Err(ExtensionError::Plan("workspace".into()));
+            if id.is_empty() {
+                return Err(ExtensionError::Plan("workspace id empty".into()));
+            }
+            if !path.is_absolute() || path.to_str().is_none() {
+                return Err(ExtensionError::Plan(
+                    "workspace path must be absolute UTF-8".into(),
+                ));
+            }
+            if roots.insert(id, path).is_some() {
+                return Err(ExtensionError::Plan("duplicate workspace id".into()));
             }
         }
         Ok(Self(roots))

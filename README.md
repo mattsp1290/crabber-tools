@@ -89,7 +89,7 @@ for secret redaction. Shell execution is not a sandbox. `required_permissions`
 is advisory; StaticPolicy matches tool names. Prefer `restrict_to_enabled: false`
 when mounting other tools, because restrictions apply to the entire run.
 
-Use one global root per agent, or Scope::Session for a shared agent. Multiple
+Use one shared root per agent, or StandardToolsFactory with host-owned WorkspaceAdmission for multiple workspaces. Multiple
 roots mounted globally collide on names. The persisted directory must match the
 admitted absolute root; AgentConfig's default `.` is rejected. Reopen the root
 handle after deleting and recreating a directory. Existing hard links and detached processes remain host concerns;
@@ -112,8 +112,8 @@ cargo run -p mount-standard --locked -- --check
 ```
 
 Tests use scripted providers, temporary workspaces, `sh`, and `rg` without
-credentials or network. CI runs Linux and macOS and a standalone consumer graph
-with crabber-extensions' command guard and a host tool. The consumer template
+credentials or network. CI runs Linux and macOS and a Git-only tools consumer with a custom extension, a custom host tool, and
+a reopened SQLite store. The consumer template
 substitutes the candidate SHA in both manifest and lockfile before `--locked`.
 
 The first deliverable for request `crabber-r-5fxy` is tagged `v0.1.0` at
@@ -178,7 +178,7 @@ scratch manifest and lockfile with the published commit SHA:
 ```sh
 probe_dir=$(mktemp -d)
 cp -R ci/consumer-probe/. "$probe_dir/"
-cp examples/mount-standard/src/{probe,contexts}.rs "$probe_dir/src/"
+cp examples/mount-standard/src/probe.rs examples/mount-standard/src/contexts.rs "$probe_dir/src/"
 mkdir -p "$probe_dir/.cargo"
 cp .cargo/config.toml "$probe_dir/.cargo/"
 ```

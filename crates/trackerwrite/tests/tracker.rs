@@ -29,7 +29,7 @@ async fn call(o: &Arc<Options>, args: Value) -> Value {
     definition(o.clone())
         .unwrap()
         .executor
-        .execute_with_context(context(&o.root, CancellationToken::new()), args)
+        .execute_owned_context(context(&o.root, CancellationToken::new()), args)
         .await
         .unwrap()
         .json_value()

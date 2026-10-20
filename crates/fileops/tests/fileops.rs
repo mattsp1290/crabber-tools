@@ -1,26 +1,10 @@
 //! Tool contracts and capability escape regressions.
-use crabber::{
-    ToolDefinition,
-    core::{RunId, SessionId, ToolCallId},
-    extension::{HostServices, ToolContext, WorkspaceContext},
-};
+use crabber::ToolDefinition;
 use crabber_tools_core::*;
 use crabber_tools_fileops::{self as fileops, Options};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
-fn context(root: &WorkspaceRoot, cancel: CancellationToken) -> ToolContext {
-    ToolContext::new(
-        SessionId::new(),
-        RunId::new(),
-        ToolCallId::new(),
-        cancel,
-        HostServices::default(),
-        WorkspaceContext::from_persisted("test", root.path().to_str().unwrap()),
-        Arc::new(|_| {}),
-    )
-    .with_resources(crabber::extension::ToolResourceOwner::new().resources())
-}
 fn options(root: &std::path::Path) -> Arc<Options> {
     let limits = Limits {
         max_in_flight: 1,
@@ -35,7 +19,7 @@ fn options(root: &std::path::Path) -> Arc<Options> {
 }
 async fn call(tool: Arc<ToolDefinition>, options: &Options, args: Value) -> Value {
     tool.executor
-        .execute_with_context(context(&options.root, CancellationToken::new()), args)
+        .execute_owned_context(context(&options.root, CancellationToken::new()), args)
         .await
         .unwrap()
         .json_value()
@@ -297,7 +281,7 @@ async fn cancelled_and_context_free_calls_have_no_effect() {
     assert!(
         write
             .executor
-            .execute_with_context(
+            .execute_owned_context(
                 context(&o.root, cancel),
                 json!({"path":"x","content":"bad"})
             )
@@ -400,3 +384,10 @@ async fn input_caps_ownership_and_unreadable_directory() {
         assert_eq!(v["error"]["category"], "io");
     }
 }
+
+#[path = "../../../test-support/mod.rs"]
+mod support;
+
+use support::context;
+
+use support::ExecuteOwned as _;

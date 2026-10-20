@@ -265,6 +265,7 @@ pub async fn answer_questions(
                 interaction_id: interaction.id.clone(),
                 resolver: ApprovalResolverClaim {
                     resolver_id: "example-host".into(),
+                    // Synthetic fixture only: real hosts derive authority from the authenticated resolver.
                     authority: interaction.description.authority().clone(),
                     authority_claim: "scripted synthetic operator".into(),
                 },

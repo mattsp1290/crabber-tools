@@ -19,7 +19,7 @@ fn options(path: &std::path::Path) -> Arc<Options> {
 async fn call(o: &Arc<Options>, patch: &str) -> Value {
     definition(o.clone())
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&o.root, CancellationToken::new()),
             json!({"patch_text":patch}),
         )
@@ -232,7 +232,7 @@ async fn validation_binary_and_alias_overlap_fail_before_writes() {
     ] {
         assert_eq!(
             d.executor
-                .execute_with_context(context(&o.root, CancellationToken::new()), args)
+                .execute_owned_context(context(&o.root, CancellationToken::new()), args)
                 .await
                 .unwrap()
                 .json_value()
@@ -288,7 +288,7 @@ async fn interruption_and_permission_denial_prevent_effects() {
     assert!(
         definition(o.clone())
             .executor
-            .execute_with_context(context(&o.root, cancel), json!({"patch_text":patch}))
+            .execute_owned_context(context(&o.root, cancel), json!({"patch_text":patch}))
             .await
             .is_err()
     );
@@ -393,7 +393,7 @@ async fn repetitive_near_match_is_preflighted_without_effects() {
         std::time::Duration::from_secs(5),
         crabber_tools_applypatch::definition(options.clone())
             .executor
-            .execute_with_context(
+            .execute_owned_context(
                 support::context(&options.root, tokio_util::sync::CancellationToken::new()),
                 serde_json::json!({"patch_text":patch}),
             ),

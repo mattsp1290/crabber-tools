@@ -12,12 +12,13 @@ use tokio_util::sync::CancellationToken;
 pub fn context(
     root: &crabber_tools_core::WorkspaceRoot,
     cancel: CancellationToken,
-) -> crabber::extension::ToolContext {
+) -> OwnedContext {
     use crabber::{
         core::{RunId, ToolCallId},
         extension::{HostServices, ToolContext, WorkspaceContext},
     };
-    ToolContext::new(
+    let owner = crabber::extension::ToolResourceOwner::new();
+    let context = ToolContext::new(
         SessionId::new(),
         RunId::new(),
         ToolCallId::new(),
@@ -26,7 +27,8 @@ pub fn context(
         WorkspaceContext::from_persisted("test", root.path().to_str().unwrap()),
         Arc::new(|_| {}),
     )
-    .with_resources(crabber::extension::ToolResourceOwner::new().resources())
+    .with_resources(owner.resources());
+    OwnedContext { context, owner }
 }
 pub fn limits() -> crabber_tools_core::Limits {
     crabber_tools_core::Limits {
@@ -215,3 +217,52 @@ pub async fn assert_stopped_uncertain(run: crabber::RunHandle, store: &MemorySto
     let saved = store.tool_phase(&id, &phase.id).await.unwrap().phase;
     assert_eq!(saved.state, crabber::session::PhaseState::Uncertain);
 }
+
+/// Direct-call fixture keeps a close capability for the entire invocation.
+pub struct OwnedContext {
+    context: crabber::extension::ToolContext,
+    owner: crabber::extension::ToolResourceOwner,
+}
+impl std::ops::Deref for OwnedContext {
+    type Target = crabber::extension::ToolContext;
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
+}
+impl OwnedContext {
+    /// Explicit lifecycle tests retain and drain the supplied owner themselves.
+    pub fn with_resources(
+        self,
+        resources: crabber::extension::ToolResources,
+    ) -> crabber::extension::ToolContext {
+        self.context.clone().with_resources(resources)
+    }
+}
+impl Drop for OwnedContext {
+    fn drop(&mut self) {
+        self.owner.close();
+    }
+}
+/// Ordinary direct-executor tests must observe the actual cleanup join.
+#[async_trait::async_trait]
+pub trait ExecuteOwned: crabber::ToolExecutor {
+    async fn execute_owned_context(
+        &self,
+        fixture: OwnedContext,
+        args: Value,
+    ) -> Result<crabber::core::ToolOutput, crabber::ExtensionError> {
+        let result = self
+            .execute_with_context(fixture.context.clone(), args)
+            .await;
+        let drain = fixture.owner.drain(Duration::from_secs(2)).await;
+        assert!(drain.sealed);
+        assert_eq!(drain.pending, 0, "direct executor left pending resources");
+        assert!(
+            drain.failures.is_empty(),
+            "direct executor cleanup failed: {:?}",
+            drain.failures
+        );
+        result
+    }
+}
+impl<T: crabber::ToolExecutor + ?Sized> ExecuteOwned for T {}
