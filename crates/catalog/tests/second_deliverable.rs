@@ -150,13 +150,19 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
 }
 #[tokio::test]
 async fn all_tools_execute_on_one_agent_without_network_or_real_hub() {
-    let root = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let real = parent.path().join("workspaces");
+    std::fs::create_dir(&real).unwrap();
+    let alias = parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let root = tempfile::tempdir_in(&alias).unwrap();
     let hub = tempfile::tempdir().unwrap();
     let mut o = options(root.path(), hub.path());
     o.user_interact = Some(UserInteractPolicy::durable(
         crabber::core::AuthorityRequirement::new("example-operator", "1").unwrap(),
     ));
-    let file_url = url_from_path(&root.path().join("x"));
+    let admitted = WorkspaceRoot::open(root.path()).unwrap();
+    let file_url = url_from_path(&admitted.path().join("x"));
     let store = Arc::new(MemoryStore::new());
     let agent=Agent::builder().behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION"))).store(store.clone()).provider(Arc::new(FakeProvider::scripted(vec![
         turn("file_write",json!({"path":"x","content":"hello"})),
@@ -174,7 +180,7 @@ async fn all_tools_execute_on_one_agent_without_network_or_real_hub() {
         turn("file_move",json!({"path":"extra.txt","new_path":"moved/extra.txt","create_dirs":true})),
         turn("multi_edit",json!({"path":"moved/extra.txt","edits":[{"anchor":"alpha","replacement":"beta"}]})),
         turn("file_delete",json!({"path":"moved/extra.txt"})),done(),
-    ]))).config(config(root.path())).policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow))).shared_extension(Arc::new(StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), o).unwrap()),Scope::Global).build().unwrap();
+    ]))).config(config(root.path())).policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow))).shared_extension(Arc::new(StandardTools::new(admitted, o).unwrap()),Scope::Global).build().unwrap();
     let run = agent.prompt(None, "parity tools").await.unwrap();
     let session = run.session_id().clone();
     let run_id = run.run_id().clone();
@@ -295,15 +301,17 @@ async fn tracker_and_file_url_share_mount_capacity() {
 #[tokio::test]
 async fn file_url_encodes_special_path_characters() {
     let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("percent%23path #space");
-    std::fs::create_dir(&root).unwrap();
+    let real = parent.path().join("percent%23path #space");
+    std::fs::create_dir(&real).unwrap();
+    let root = parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&real, &root).unwrap();
     let hub = tempfile::tempdir().unwrap();
     let mut o = options(&root, hub.path());
     o.enabled = EnabledSet::only([ToolId::UrlFetch]);
-    let path = root.join("text%23 #.txt");
-    std::fs::write(&path, "encoded path").unwrap();
     let admitted = WorkspaceRoot::open(&root).unwrap();
-    let tools = StandardTools::new(WorkspaceRoot::open(&root).unwrap(), o).unwrap();
+    let path = admitted.path().join("text%23 #.txt");
+    std::fs::write(&path, "encoded path").unwrap();
+    let tools = StandardTools::new(admitted.clone(), o).unwrap();
     let result = tools.definitions()[0]
         .definition
         .executor
