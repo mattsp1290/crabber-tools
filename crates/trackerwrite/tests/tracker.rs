@@ -29,8 +29,10 @@ async fn call(o: &Arc<Options>, args: Value) -> Value {
     definition(o.clone())
         .unwrap()
         .executor
-        .execute_with_context(context(&o.root, CancellationToken::new()), args)
+        .execute_owned_context(context(&o.root, CancellationToken::new()), args)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 #[tokio::test]
@@ -220,8 +222,7 @@ async fn invalid_arguments_and_policy_fail_before_execution() {
 #[tokio::test]
 async fn agent_interruption_kills_tracker_process_group() {
     use crabber::{
-        Agent, FakeProvider, PermissionDecision, StaticPolicy,
-        core::{RunStatus, ToolCallStatus},
+        Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
         session::MemoryStore,
     };
     let root = tempfile::tempdir().unwrap();
@@ -233,6 +234,7 @@ async fn agent_interruption_kills_tracker_process_group() {
     );
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("tracker_write", json!({"op":"close","id":"demo-ab12"})),
@@ -240,7 +242,7 @@ async fn agent_interruption_kills_tracker_process_group() {
         ])))
         .config(config(root.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(definition(o.clone()).unwrap())
+        .shared_tool(definition(o.clone()).unwrap())
         .build()
         .unwrap();
     let run = agent.prompt(None, "track").await.unwrap();
@@ -250,10 +252,10 @@ async fn agent_interruption_kills_tracker_process_group() {
     let child = pid(&hub.path().join("child"));
     let leader = pid(&hub.path().join("leader"));
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     assert_gone(child).await;
     assert_gone(leader).await;

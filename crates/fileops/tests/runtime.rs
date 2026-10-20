@@ -2,8 +2,7 @@
 #[path = "../../../test-support/mod.rs"]
 mod support;
 use crabber::{
-    Agent, FakeProvider, PermissionDecision, StaticPolicy,
-    core::{RunStatus, ToolCallStatus},
+    Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
     session::MemoryStore,
 };
 use crabber_tools_core::*;
@@ -37,6 +36,7 @@ async fn interrupted_atomic_write_finishes_with_owned_guard() {
     let o = options(temp.path(), Some(hook));
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("file_write", json!({"path":"target","content":"complete"})),
@@ -44,7 +44,7 @@ async fn interrupted_atomic_write_finishes_with_owned_guard() {
         ])))
         .config(config(temp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(fileops::write::definition(o.clone()))
+        .shared_tool(fileops::write::definition(o.clone()))
         .build()
         .unwrap();
     let run = agent.prompt(None, "write").await.unwrap();
@@ -52,12 +52,22 @@ async fn interrupted_atomic_write_finishes_with_owned_guard() {
     tokio::time::timeout(Duration::from_secs(2), start_rx.recv())
         .await
         .unwrap();
+    let interrupted_run = run.run_id().clone();
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
+    let incomplete = agent.drain_execution_tasks(Duration::from_millis(10)).await;
+    let resources = &incomplete
+        .resources
+        .iter()
+        .find(|r| r.run_id == interrupted_run)
+        .unwrap()
+        .resources;
+    assert!(resources.sealed);
+    assert!(resources.pending >= 1);
     assert!(!temp.path().join("target").exists());
     // The write is already running off-thread: interruption cannot release its writer lock.
     let short = Limits {
@@ -98,6 +108,16 @@ async fn interrupted_atomic_write_finishes_with_owned_guard() {
             .to_string_lossy()
             .starts_with(fileops::TEMP_PREFIX)
     }));
+    let complete = agent.drain_execution_tasks(Duration::from_secs(2)).await;
+    let resources = &complete
+        .resources
+        .iter()
+        .find(|r| r.run_id == interrupted_run)
+        .unwrap()
+        .resources;
+    assert_eq!(resources.pending, 0);
+    assert!(resources.joined >= 1);
+    assert!(resources.failures.is_empty());
     agent.close_extensions().await.unwrap();
 }
 #[tokio::test]
@@ -125,6 +145,7 @@ async fn mismatch_permissions_and_panic() {
     }
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("file_write", json!({"path":"no","content":"bad"})),
@@ -135,7 +156,7 @@ async fn mismatch_permissions_and_panic() {
             StaticPolicy::new(PermissionDecision::Allow)
                 .with_rule("file_write", PermissionDecision::Deny),
         ))
-        .tool(fileops::write::definition(o.clone()))
+        .shared_tool(fileops::write::definition(o.clone()))
         .build()
         .unwrap();
     let run = agent.prompt(None, "deny").await.unwrap();

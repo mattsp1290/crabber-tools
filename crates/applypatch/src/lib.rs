@@ -43,18 +43,21 @@ struct Args {
 struct PatchTool(Arc<Options>);
 #[async_trait]
 impl ToolExecutor for PatchTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(result::failure(
-            ToolError::new(category::VALIDATION, "context required"),
-            vec![],
-            false,
-        ))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         args: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        self.invoke(ctx, args)
+            .await
+            .map(|value| crabber_tools_core::to_output(value, &[]))
+    }
+}
+impl PatchTool {
+    async fn invoke(&self, ctx: ToolContext, args: Value) -> Result<Value, ExtensionError> {
         check_cancelled(&ctx.cancel)?;
         let fail = |e| result::failure(e, vec![], false);
         let args = match serde_json::from_value::<Args>(args) {
@@ -97,15 +100,14 @@ impl ToolExecutor for PatchTool {
             }
         };
         let options = self.0.clone();
-        let cancel = ctx.cancel.clone();
-        run_blocking(&ctx.cancel, move || {
+        run_blocking_owned(&ctx, move |cancel| {
             let _guards = guards;
             let operations = match parser::parse(&args.patch_text) {
                 Ok(o) => o,
                 Err(e) => return fail(e),
             };
-            match preflight::plan(&options.root, operations, &cancel) {
-                Ok(plan) => commit::apply(&options.root, plan, &cancel),
+            match preflight::plan(&options.root, operations, cancel) {
+                Ok(plan) => commit::apply(&options.root, plan, cancel),
                 Err((error, files)) => result::failure(error, files, false),
             }
         })

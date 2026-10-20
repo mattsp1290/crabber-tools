@@ -32,7 +32,12 @@ async fn next_record(
         }
     }
 }
-pub(crate) async fn run(options: &Options, args: Args) -> Value {
+pub(crate) async fn run(
+    options: &Options,
+    args: Args,
+    ctx: &crabber::extension::ToolContext,
+    permit: impl Send + 'static,
+) -> Value {
     let start = Instant::now();
     let mut command = Command::new(&options.policy.rg_binary);
     command.args(["--json", "--no-messages", "--no-config"]);
@@ -59,19 +64,10 @@ pub(crate) async fn run(options: &Options, args: Args) -> Value {
         .stderr(Stdio::piped());
     apply_policy(&mut command, &options.policy.env, options.policy.run_as);
     command.env_remove("RIPGREP_CONFIG_PATH");
-    let mut guard = match ProcessGroupGuard::spawn(&mut command) {
-        Ok(g) => g,
-        Err(_) => {
-            return result(
-                Parser::new(args.context, args.limit, !args.literal),
-                start,
-                false,
-                true,
-                None,
-                "",
-            );
-        }
-    };
+    let context = args.context;
+    let limit = args.limit;
+    let regex = !args.literal;
+    match run_process_owned_with(ctx, command, permit, move |guard| Box::pin(async move {
     let mut stdout = BufReader::new(guard.take_stdout().expect("piped stdout"));
     let mut stderr = guard.take_stderr().expect("piped stderr");
     let mut diagnostic = CappedOutput::default();
@@ -110,15 +106,14 @@ pub(crate) async fn run(options: &Options, args: Args) -> Value {
             },
         }
     }
-    result(
-        parser,
-        start,
-        timed_out,
-        failed,
-        status.and_then(|s| s.code()),
-        &diagnostic.text(),
-    )
+    Ok(result(parser, start, timed_out, failed, status.and_then(|s| s.code()), &diagnostic.text()))
+    })).await {
+        Ok(value) => value,
+        Err(ProcessRunError::Unavailable) => failed_value(category::UNAVAILABLE, "call resources unavailable"),
+        Err(_) => result(Parser::new(context, limit, regex), start, false, true, None, ""),
+    }
 }
+
 fn result(
     parser: Parser,
     start: Instant,

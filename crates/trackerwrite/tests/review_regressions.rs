@@ -32,8 +32,10 @@ async fn call(o: &Arc<Options>, value: Value) -> Value {
     definition(o.clone())
         .unwrap()
         .executor
-        .execute_with_context(support::context(&o.root, CancellationToken::new()), value)
+        .execute_owned_context(support::context(&o.root, CancellationToken::new()), value)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 #[tokio::test]
@@ -72,7 +74,7 @@ async fn cancelled_and_busy_calls_never_spawn() {
     let result = definition(o.clone())
         .unwrap()
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             support::context(&o.root, cancel),
             json!({"op":"close","id":"demo-ab12"}),
         )
@@ -86,3 +88,5 @@ async fn cancelled_and_busy_calls_never_spawn() {
     assert_eq!(result["error"]["category"], "unavailable");
     assert!(!hub.path().join("executed").exists());
 }
+
+use support::ExecuteOwned as _;

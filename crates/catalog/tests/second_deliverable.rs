@@ -8,16 +8,15 @@ use crabber::{
 };
 use crabber_tools_catalog::prelude::*;
 use serde_json::json;
-use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, path::Path, sync::Arc};
 use support::*;
-fn options(root: &Path, hub: &Path) -> Options {
+fn options(_root: &Path, hub: &Path) -> Policies {
     let binary = hub.join("fake-bn");
     script(
         &binary,
         "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BEANS_HUB/argv\"\n",
     );
-    Options {
-        root: WorkspaceRoot::open(root).unwrap(),
+    Policies {
         enabled: EnabledSet::all(),
         restrict_to_enabled: false,
         shell: ShellPolicy {
@@ -52,7 +51,7 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
         o.tracker = None;
         o.user_interact = None;
         assert!(matches!(
-            StandardTools::new(o),
+            StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), o),
             Err(crabber::ExtensionError::Plan(_))
         ));
     }
@@ -61,7 +60,13 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
     subset.url_fetch = None;
     subset.tracker = None;
     subset.user_interact = None;
-    assert_eq!(StandardTools::new(subset).unwrap().definitions().len(), 1);
+    assert_eq!(
+        StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), subset)
+            .unwrap()
+            .definitions()
+            .len(),
+        1
+    );
     for invalid in 0..3 {
         let mut o = options(root.path(), hub.path());
         o.enabled = EnabledSet::only([ToolId::FileRead]);
@@ -74,17 +79,20 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
         } else if invalid == 1 {
             o.tracker.as_mut().unwrap().project = "--flag".into();
         } else {
-            o.user_interact.as_mut().unwrap().max_wait = Duration::ZERO;
+            o.user_interact.as_mut().unwrap().max_question_bytes = 0;
         }
         assert!(matches!(
-            StandardTools::new(o),
+            StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), o),
             Err(crabber::ExtensionError::Plan(_))
         ));
     }
-    let hash = StandardTools::new(options(root.path(), hub.path()))
-        .unwrap()
-        .config_hash();
-    for change in 0..9 {
+    let hash = StandardTools::new(
+        WorkspaceRoot::open(root.path()).unwrap(),
+        options(root.path(), hub.path()),
+    )
+    .unwrap()
+    .config_hash();
+    for change in 0..8 {
         let mut o = options(root.path(), hub.path());
         match change {
             0 => o.url_fetch.as_mut().unwrap().deny_private_ranges = false,
@@ -105,18 +113,21 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
                 .unwrap()
                 .environment
                 .push(("LANG".into(), "C".into())),
-            6 => {
-                o.user_interact.as_mut().unwrap().surface = Surface::Prompter {
-                    identity: "a".into(),
-                    prompter: Arc::new(ScriptedPrompter),
-                }
-            }
-            7 => o.user_interact.as_mut().unwrap().max_question_bytes /= 2,
-            _ => o.user_interact.as_mut().unwrap().max_outstanding_prompts = 2,
+            6 => o.user_interact.as_mut().unwrap().max_answer_bytes /= 2,
+            _ => o.user_interact.as_mut().unwrap().max_question_bytes /= 2,
         }
-        assert_ne!(hash, StandardTools::new(o).unwrap().config_hash());
+        assert_ne!(
+            hash,
+            StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), o)
+                .unwrap()
+                .config_hash()
+        );
     }
-    let tools = StandardTools::new(options(root.path(), hub.path())).unwrap();
+    let tools = StandardTools::new(
+        WorkspaceRoot::open(root.path()).unwrap(),
+        options(root.path(), hub.path()),
+    )
+    .unwrap();
     assert_eq!(tools.definitions().len(), 14);
     assert_eq!(
         tools.definitions().iter().map(|d| d.id).collect::<Vec<_>>(),
@@ -129,16 +140,31 @@ fn explicit_policies_are_required_only_for_enabled_tools_and_hashed() {
     assert!(!ToolId::UserInteract.mutating());
     let mut parity = options(root.path(), hub.path());
     parity.enabled = EnabledSet::eino_parity();
-    assert_eq!(StandardTools::new(parity).unwrap().definitions().len(), 11);
+    assert_eq!(
+        StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), parity)
+            .unwrap()
+            .definitions()
+            .len(),
+        11
+    );
 }
 #[tokio::test]
 async fn all_tools_execute_on_one_agent_without_network_or_real_hub() {
-    let root = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let real = parent.path().join("workspaces");
+    std::fs::create_dir(&real).unwrap();
+    let alias = parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let root = tempfile::tempdir_in(&alias).unwrap();
     let hub = tempfile::tempdir().unwrap();
-    let o = options(root.path(), hub.path());
-    let file_url = url_from_path(&o.root.path().join("x"));
+    let mut o = options(root.path(), hub.path());
+    o.user_interact = Some(UserInteractPolicy::durable(
+        crabber::core::AuthorityRequirement::new("example-operator", "1").unwrap(),
+    ));
+    let admitted = WorkspaceRoot::open(root.path()).unwrap();
+    let file_url = url_from_path(&admitted.path().join("x"));
     let store = Arc::new(MemoryStore::new());
-    let agent=Agent::builder().store(store.clone()).provider(Arc::new(FakeProvider::scripted(vec![
+    let agent=Agent::builder().behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION"))).store(store.clone()).provider(Arc::new(FakeProvider::scripted(vec![
         turn("file_write",json!({"path":"x","content":"hello"})),
         turn("file_read",json!({"path":"x"})),
         turn("file_edit",json!({"path":"x","anchor":"hello","replacement":"world"})),
@@ -150,17 +176,26 @@ async fn all_tools_execute_on_one_agent_without_network_or_real_hub() {
         turn("url_fetch",json!({"url":file_url})),
         turn("tracker_write",json!({"op":"comment","id":"demo-ab12","body":"done"})),
         turn("user_interact",json!({"question":"Continue?"})),
-        turn("user_interact",json!({"question":"Continue?","answer":"yes"})),
         turn("file_write",json!({"path":"extra.txt","content":"alpha"})),
         turn("file_move",json!({"path":"extra.txt","new_path":"moved/extra.txt","create_dirs":true})),
         turn("multi_edit",json!({"path":"moved/extra.txt","edits":[{"anchor":"alpha","replacement":"beta"}]})),
         turn("file_delete",json!({"path":"moved/extra.txt"})),done(),
-    ]))).config(config(root.path())).policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow))).extension(Arc::new(StandardTools::new(o).unwrap()),Scope::Global).build().unwrap();
+    ]))).config(config(root.path())).policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow))).shared_extension(Arc::new(StandardTools::new(admitted, o).unwrap()),Scope::Global).build().unwrap();
     let run = agent.prompt(None, "parity tools").await.unwrap();
     let session = run.session_id().clone();
-    run.done().await.unwrap();
+    let run_id = run.run_id().clone();
+    assert_eq!(
+        run.done().await.unwrap().status,
+        crabber::core::RunStatus::Paused
+    );
+    probe::answer_questions(&agent, &session, &run_id, json!("yes"))
+        .await
+        .unwrap()
+        .done()
+        .await
+        .unwrap();
     let records = calls(&store, &session).await;
-    assert_eq!(records.len(), 16);
+    assert_eq!(records.len(), 15);
     assert!(!root.path().join("moved/extra.txt").exists());
     assert!(root.path().join("moved").is_dir());
     assert_eq!(
@@ -186,10 +221,9 @@ async fn all_tools_execute_on_one_agent_without_network_or_real_hub() {
         .map(value)
         .collect();
     assert_eq!(
-        questions[0],
-        json!({"outcome":"pending","question":"Continue?"})
+        questions,
+        vec![json!({"outcome":"succeeded","answer":"yes"})]
     );
-    assert_eq!(questions[1], json!({"outcome":"succeeded","answer":"yes"}));
     assert_eq!(
         std::fs::read_to_string(root.path().join("patched.txt")).unwrap(),
         "patched\n"
@@ -214,9 +248,9 @@ async fn tracker_and_file_url_share_mount_capacity() {
         &o.tracker.as_ref().unwrap().bn_binary,
         "#!/bin/sh\ntouch \"$BEANS_HUB/started\"\nexec sleep 60\n",
     );
-    let admitted = o.root.clone();
+    let admitted = WorkspaceRoot::open(root.path()).unwrap();
     std::fs::write(admitted.path().join("text"), "ok").unwrap();
-    let tools = StandardTools::new(o).unwrap();
+    let tools = StandardTools::new(WorkspaceRoot::open(root.path()).unwrap(), o).unwrap();
     let find = |id| {
         tools
             .definitions()
@@ -233,29 +267,33 @@ async fn tracker_and_file_url_share_mount_capacity() {
     let task = tokio::spawn(async move {
         tracker
             .executor
-            .execute_with_context(ctx, json!({"op":"close","id":"demo-ab12"}))
+            .execute_owned_context(ctx, json!({"op":"close","id":"demo-ab12"}))
             .await
     });
     wait_file(&hub.path().join("started")).await;
     let args = json!({"url":url_from_path(&admitted.path().join("text"))});
     let result = url
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&admitted, tokio_util::sync::CancellationToken::new()),
             args.clone(),
         )
         .await
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["error"]["category"], "unavailable");
     cancel.cancel();
     assert!(task.await.unwrap().is_err());
     let result = url
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&admitted, tokio_util::sync::CancellationToken::new()),
             args,
         )
         .await
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["content"], "ok");
 }
@@ -263,198 +301,31 @@ async fn tracker_and_file_url_share_mount_capacity() {
 #[tokio::test]
 async fn file_url_encodes_special_path_characters() {
     let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("percent%23path #space");
-    std::fs::create_dir(&root).unwrap();
+    let real = parent.path().join("percent%23path #space");
+    std::fs::create_dir(&real).unwrap();
+    let root = parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&real, &root).unwrap();
     let hub = tempfile::tempdir().unwrap();
     let mut o = options(&root, hub.path());
     o.enabled = EnabledSet::only([ToolId::UrlFetch]);
-    let path = o.root.path().join("text%23 #.txt");
+    let admitted = WorkspaceRoot::open(&root).unwrap();
+    let path = admitted.path().join("text%23 #.txt");
     std::fs::write(&path, "encoded path").unwrap();
-    let admitted = o.root.clone();
-    let tools = StandardTools::new(o).unwrap();
+    let tools = StandardTools::new(admitted.clone(), o).unwrap();
     let result = tools.definitions()[0]
         .definition
         .executor
-        .execute_with_context(
+        .execute_owned_context(
             context(&admitted, tokio_util::sync::CancellationToken::new()),
             json!({"url":url_from_path(&path)}),
         )
         .await
+        .unwrap()
+        .json_value()
         .unwrap();
     assert_eq!(result["content"], "encoded path");
 }
 
-struct ScriptedPrompter;
-#[async_trait::async_trait]
-impl crabber::extension::UserPrompter for ScriptedPrompter {
-    async fn ask(&self, _: &str) -> Result<String, String> {
-        Ok("yes\n".into())
-    }
-}
-struct HangingPrompter {
-    started: tokio::sync::Notify,
-    dropped: tokio::sync::Notify,
-}
-struct PromptDrop<'a>(&'a tokio::sync::Notify);
-impl Drop for PromptDrop<'_> {
-    fn drop(&mut self) {
-        self.0.notify_one();
-    }
-}
-#[async_trait::async_trait]
-impl crabber::extension::UserPrompter for HangingPrompter {
-    async fn ask(&self, _: &str) -> Result<String, String> {
-        let _guard = PromptDrop(&self.dropped);
-        self.started.notify_one();
-        std::future::pending().await
-    }
-}
-fn hanging_prompter() -> Arc<HangingPrompter> {
-    Arc::new(HangingPrompter {
-        started: tokio::sync::Notify::new(),
-        dropped: tokio::sync::Notify::new(),
-    })
-}
-async fn notified(n: &tokio::sync::Notify) {
-    tokio::time::timeout(Duration::from_secs(2), n.notified())
-        .await
-        .unwrap();
-}
-fn prompt_policy(p: Arc<dyn crabber::extension::UserPrompter>) -> UserInteractPolicy {
-    UserInteractPolicy {
-        surface: Surface::Prompter {
-            identity: "test".into(),
-            prompter: p,
-        },
-        ..UserInteractPolicy::pending()
-    }
-}
-#[tokio::test]
-async fn prompter_surface_executes_through_agent() {
-    let root = tempfile::tempdir().unwrap();
-    let hub = tempfile::tempdir().unwrap();
-    let mut o = options(root.path(), hub.path());
-    o.user_interact = Some(prompt_policy(Arc::new(ScriptedPrompter)));
-    let store = Arc::new(MemoryStore::new());
-    let agent = Agent::builder()
-        .store(store.clone())
-        .provider(Arc::new(FakeProvider::scripted(vec![
-            turn("user_interact", json!({"question":"Continue?"})),
-            done(),
-        ])))
-        .config(config(root.path()))
-        .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .extension(Arc::new(StandardTools::new(o).unwrap()), Scope::Global)
-        .build()
-        .unwrap();
-    let run = agent.prompt(None, "prompt").await.unwrap();
-    let id = run.session_id().clone();
-    run.done().await.unwrap();
-    let records = calls(&store, &id).await;
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].status, crabber::core::ToolCallStatus::Completed);
-    assert_eq!(
-        value(&records[0]),
-        json!({"outcome":"succeeded","answer":"yes"})
-    );
-    agent.close_extensions().await.unwrap();
-}
-#[tokio::test]
-async fn hanging_prompt_does_not_consume_mount_capacity() {
-    let root = tempfile::tempdir().unwrap();
-    let hub = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("x"), "ok").unwrap();
-    let p = hanging_prompter();
-    let mut o = options(root.path(), hub.path());
-    o.limits.max_in_flight = 1;
-    o.user_interact = Some(prompt_policy(p.clone()));
-    let admitted = o.root.clone();
-    let tools = StandardTools::new(o).unwrap();
-    let prompt = tools
-        .definitions()
-        .iter()
-        .find(|d| d.id == ToolId::UserInteract)
-        .unwrap()
-        .definition
-        .clone();
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let ctx = context(&admitted, cancel.clone());
-    let task = tokio::spawn(async move {
-        prompt
-            .executor
-            .execute_with_context(ctx, json!({"question":"Q?"}))
-            .await
-    });
-    notified(&p.started).await;
-    let read = tools
-        .definitions()
-        .iter()
-        .find(|d| d.id == ToolId::FileRead)
-        .unwrap();
-    let result = read
-        .definition
-        .executor
-        .execute_with_context(
-            context(&admitted, tokio_util::sync::CancellationToken::new()),
-            json!({"path":"x"}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(result["outcome"], "succeeded");
-    cancel.cancel();
-    assert!(task.await.unwrap().is_err());
-    notified(&p.dropped).await;
-}
-#[tokio::test]
-async fn interrupted_prompt_frees_mount() {
-    let root = tempfile::tempdir().unwrap();
-    let hub = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("x"), "ok").unwrap();
-    let p = hanging_prompter();
-    let mut o = options(root.path(), hub.path());
-    o.limits.max_in_flight = 1;
-    o.user_interact = Some(prompt_policy(p.clone()));
-    let admitted = o.root.clone();
-    let tools = Arc::new(StandardTools::new(o).unwrap());
-    let store = Arc::new(MemoryStore::new());
-    let agent = Agent::builder()
-        .store(store.clone())
-        .provider(Arc::new(FakeProvider::scripted(vec![
-            turn("user_interact", json!({"question":"Q?"})),
-            done(),
-        ])))
-        .config(config(root.path()))
-        .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .extension(tools.clone(), Scope::Global)
-        .build()
-        .unwrap();
-    let run = agent.prompt(None, "prompt").await.unwrap();
-    let id = run.session_id().clone();
-    notified(&p.started).await;
-    run.interrupt();
-    assert_eq!(
-        run.done().await.unwrap().status,
-        crabber::core::RunStatus::Interrupted
-    );
-    assert_eq!(
-        calls(&store, &id).await[0].status,
-        crabber::core::ToolCallStatus::Interrupted
-    );
-    notified(&p.dropped).await;
-    let read = tools
-        .definitions()
-        .iter()
-        .find(|d| d.id == ToolId::FileRead)
-        .unwrap();
-    let result = read
-        .definition
-        .executor
-        .execute_with_context(
-            context(&admitted, tokio_util::sync::CancellationToken::new()),
-            json!({"path":"x"}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(result["outcome"], "succeeded");
-    agent.close_extensions().await.unwrap();
-}
+#[allow(dead_code)]
+#[path = "../../../examples/mount-standard/src/probe.rs"]
+mod probe;

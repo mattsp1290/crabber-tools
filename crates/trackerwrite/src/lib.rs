@@ -36,18 +36,21 @@ pub fn definition(options: Arc<Options>) -> Result<Arc<ToolDefinition>, Extensio
 struct TrackerTool(Arc<Options>);
 #[async_trait]
 impl ToolExecutor for TrackerTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(result::failure(
-            "",
-            "",
-            ToolError::new(category::VALIDATION, "context required"),
-        ))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         value: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        self.invoke(ctx, value)
+            .await
+            .map(|value| crabber_tools_core::to_output(value, &[]))
+    }
+}
+impl TrackerTool {
+    async fn invoke(&self, ctx: ToolContext, value: Value) -> Result<Value, ExtensionError> {
         check_cancelled(&ctx.cancel)?;
         let args = match serde_json::from_value::<args::Args>(value) {
             Ok(a) => a,
@@ -71,7 +74,7 @@ impl ToolExecutor for TrackerTool {
         {
             return Ok(fail(e));
         }
-        let _permit = match acquire_read(&self.0.capacity, &self.0.limits, &ctx.cancel).await {
+        let permit = match acquire_read(&self.0.capacity, &self.0.limits, &ctx.cancel).await {
             Ok(p) => p,
             Err(AcquireError::Cancelled) => return Err(ExtensionError::Tool("cancelled".into())),
             Err(AcquireError::Unavailable) => {
@@ -83,7 +86,7 @@ impl ToolExecutor for TrackerTool {
         };
         tokio::select! {biased;
             _=ctx.cancel.cancelled()=>Err(ExtensionError::Tool("cancelled".into())),
-            result=run::run(&self.0,&args,argv)=>Ok(result),
+            result=run::run(&self.0,&args,argv,&ctx,permit)=>Ok(result),
         }
     }
 }

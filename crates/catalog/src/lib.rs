@@ -15,6 +15,8 @@ use crabber_tools_trackerwrite::TrackerPolicy;
 use crabber_tools_urlfetch::UrlFetchPolicy;
 use crabber_tools_userinteract::UserInteractPolicy;
 use std::sync::Arc;
+mod factory;
+pub use factory::StandardToolsFactory;
 mod ids;
 pub mod prelude;
 pub use ids::*;
@@ -55,10 +57,9 @@ pub fn metadata() -> Vec<(ToolId, ToolInfo, String)> {
         })
         .collect()
 }
-/// Explicit policies for a single admitted workspace mount.
-pub struct Options {
-    /// Root shared by every executor.
-    pub root: Arc<WorkspaceRoot>,
+/// Root-independent policies cloned into each admitted workspace.
+#[derive(Clone)]
+pub struct Policies {
     /// Register only this subset; cannot be empty.
     pub enabled: EnabledSet,
     /// Run-wide restriction: also denies other extensions and host tools. Usually false.
@@ -84,47 +85,23 @@ pub struct StandardTools {
 }
 impl StandardTools {
     /// Validate all policies and build a shared capacity plus process-global root lock.
-    pub fn new(options: Options) -> Result<Self, ExtensionError> {
-        options.shell.validate()?;
-        options.search.validate()?;
-        options.limits.validate()?;
-        if let Some(policy) = &options.url_fetch {
-            policy.validate()?;
-        }
-        if let Some(policy) = &options.tracker {
-            policy.validate()?;
-        }
-        if let Some(policy) = &options.user_interact {
-            policy.validate()?;
-        }
-        if options.enabled.contains(ToolId::UrlFetch) && options.url_fetch.is_none() {
-            return Err(ExtensionError::Plan("url_fetch policy is required".into()));
-        }
-        if options.enabled.contains(ToolId::TrackerWrite) && options.tracker.is_none() {
-            return Err(ExtensionError::Plan(
-                "tracker_write policy is required".into(),
-            ));
-        }
-        if options.enabled.contains(ToolId::UserInteract) && options.user_interact.is_none() {
-            return Err(ExtensionError::Plan(
-                "user_interact policy is required".into(),
-            ));
-        }
+    pub fn new(root: Arc<WorkspaceRoot>, options: Policies) -> Result<Self, ExtensionError> {
+        options.validate()?;
         let capacity = Capacity::new(&options.limits)?;
         let files = Arc::new(crabber_tools_fileops::Options {
-            root: options.root.clone(),
+            root: root.clone(),
             limits: options.limits.clone(),
             capacity: capacity.clone(),
             pre_write: None,
         });
         let search = Arc::new(crabber_tools_search::Options {
-            root: options.root.clone(),
+            root: root.clone(),
             limits: options.limits.clone(),
             capacity: capacity.clone(),
             policy: options.search.clone(),
         });
         let shell = Arc::new(crabber_tools_shell::Options {
-            root: options.root.clone(),
+            root: root.clone(),
             limits: options.limits.clone(),
             capacity: capacity.clone(),
             policy: options.shell.clone(),
@@ -148,21 +125,21 @@ impl StandardTools {
                     ToolId::Shell => crabber_tools_shell::definition(shell.clone())?,
                     ToolId::Glob => {
                         crabber_tools_glob::definition(Arc::new(crabber_tools_glob::Options {
-                            root: options.root.clone(),
+                            root: root.clone(),
                             limits: options.limits.clone(),
                             capacity: capacity.clone(),
                         }))
                     }
                     ToolId::ApplyPatch => crabber_tools_applypatch::definition(Arc::new(
                         crabber_tools_applypatch::Options {
-                            root: options.root.clone(),
+                            root: root.clone(),
                             limits: options.limits.clone(),
                             capacity: capacity.clone(),
                         },
                     )),
                     ToolId::UrlFetch => crabber_tools_urlfetch::definition(Arc::new(
                         crabber_tools_urlfetch::Options {
-                            root: options.root.clone(),
+                            root: root.clone(),
                             limits: options.limits.clone(),
                             capacity: capacity.clone(),
                             policy: options.url_fetch.clone().ok_or_else(|| {
@@ -172,7 +149,7 @@ impl StandardTools {
                     ))?,
                     ToolId::TrackerWrite => crabber_tools_trackerwrite::definition(Arc::new(
                         crabber_tools_trackerwrite::Options {
-                            root: options.root.clone(),
+                            root: root.clone(),
                             limits: options.limits.clone(),
                             capacity: capacity.clone(),
                             policy: options.tracker.clone().ok_or_else(|| {
@@ -199,23 +176,7 @@ impl StandardTools {
         if definitions.is_empty() {
             return Err(ExtensionError::Plan("enabled set is empty".into()));
         }
-        let identities: Vec<_> = definitions
-            .iter()
-            .map(|d| (d.id.id(), &d.schema_hash))
-            .collect();
-        let hash = config_hash(&(
-            CONFIG_IDENTITY_VERSION,
-            env!("CARGO_PKG_VERSION"),
-            identities,
-            &options.shell,
-            &options.search,
-            &options.url_fetch,
-            &options.tracker,
-            &options.user_interact,
-            &options.limits,
-            options.root.path(),
-            options.restrict_to_enabled,
-        ));
+        let hash = config_hash(&(options.config_identity(), root.path()));
         Ok(Self {
             definitions,
             hash,
@@ -244,6 +205,63 @@ impl Extension for StandardTools {
         }
         if self.restrict {
             r.restrict_tools(self.definitions.iter().map(|d| d.info.name.clone()));
+        }
+        Ok(())
+    }
+}
+
+impl Policies {
+    // One owner for the root-free fingerprint contract. Both mounting paths use
+    // identical enabled schemas and policy inputs; shared mounts additionally bind root.
+    pub(crate) fn config_identity(&self) -> String {
+        let identities: Vec<_> = metadata()
+            .into_iter()
+            .filter(|(id, _, _)| self.enabled.contains(*id))
+            .map(|(id, _, hash)| (id.id(), hash))
+            .collect();
+        config_hash(&(
+            CONFIG_IDENTITY_VERSION,
+            env!("CARGO_PKG_VERSION"),
+            identities,
+            &self.shell,
+            &self.search,
+            &self.url_fetch,
+            &self.tracker,
+            &self.user_interact,
+            &self.limits,
+            self.restrict_to_enabled,
+        ))
+    }
+
+    /// Validate all configured policies, including optional disabled-tool policies.
+    pub fn validate(&self) -> Result<(), ExtensionError> {
+        self.shell.validate()?;
+        self.search.validate()?;
+        self.limits.validate()?;
+        if let Some(policy) = &self.url_fetch {
+            policy.validate()?;
+        }
+        if let Some(policy) = &self.tracker {
+            policy.validate()?;
+        }
+        if let Some(policy) = &self.user_interact {
+            policy.validate()?;
+        }
+        if self.enabled.contains(ToolId::UrlFetch) && self.url_fetch.is_none() {
+            return Err(ExtensionError::Plan("url_fetch policy is required".into()));
+        }
+        if self.enabled.contains(ToolId::TrackerWrite) && self.tracker.is_none() {
+            return Err(ExtensionError::Plan(
+                "tracker_write policy is required".into(),
+            ));
+        }
+        if self.enabled.contains(ToolId::UserInteract) && self.user_interact.is_none() {
+            return Err(ExtensionError::Plan(
+                "user_interact policy is required".into(),
+            ));
+        }
+        if !ToolId::ALL.into_iter().any(|id| self.enabled.contains(id)) {
+            return Err(ExtensionError::Plan("enabled set is empty".into()));
         }
         Ok(())
     }

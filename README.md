@@ -7,9 +7,9 @@ host-chosen subset with bounded work, capability-rooted file access, and process
 group cleanup on cancellation. Unix only; Rust 2024, toolchain 1.99.0.
 
 Depend on `crabber-tools-catalog` at an immutable git revision. This workspace
-pins Crabber at `883189465397b2fd326a6ef358c8a2fbd39fbec8`, matching
-crabber-extensions `8c611687723a79944226fa61501be64e4e81a74f`. All three must use
-one Crabber revision. These repositories are public; CI rewrites SSH dependency
+pins Crabber at `3ff793c982aa1fc31e5d3a2bbe459f753d7bbf8e`. The coordinated
+crabber-extensions revision is pending `crabber-extensions-r-a1fx`; the tools-only
+consumer currently omits that sibling. All consumers must use one Crabber revision. These repositories are public; CI rewrites SSH dependency
 URLs to HTTPS and optionally uses `CRABBER_READ_TOKEN` when configured. Enable the `CONSUMER_PROBE=true` repository variable for the
 standalone consumer CI job.
 
@@ -27,8 +27,7 @@ use crabber_tools_catalog::prelude::*;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let directory = tempfile::tempdir()?;
 let root = WorkspaceRoot::open(directory.path())?;
-let tools = StandardTools::new(Options {
-    root: root.clone(),
+let tools = StandardTools::new(root.clone(), Policies {
     enabled: EnabledSet::only([ToolId::FileRead, ToolId::Search, ToolId::Shell]),
     restrict_to_enabled: false,
     shell: ShellPolicy {
@@ -48,13 +47,13 @@ let mut config = AgentConfig::new(Selection {
     provider_id: "fake".into(), model_id: "scripted".into(),
 });
 config.directory = root.path().to_string_lossy().into_owned();
-let agent = Agent::builder().memory()
+let agent = Agent::builder().behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION"))).memory()
     .config(config)
     .provider(Arc::new(FakeProvider::scripted(vec![vec![
         StreamDelta::TextDelta("ready".into()), StreamDelta::Completed,
     ]])))
     .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-    .extension(Arc::new(tools), Scope::Global).build()?;
+    .shared_extension(Arc::new(tools), Scope::Global).build()?;
 agent.prompt(None, "Ready?").await?.done().await?;
 agent.close_extensions().await?;
 # Ok(())
@@ -78,7 +77,7 @@ and checks persisted results.
 | crabber-tools-applypatch | Preflighted multi-file patches with atomic per-file commits |
 | crabber-tools-urlfetch | Policy-constrained HTTPS and workspace-confined file text |
 | crabber-tools-trackerwrite | Explicit bn-backed tracker mutations with bounded lifecycle |
-| crabber-tools-userinteract | Host-prompter or pending user questions |
+| crabber-tools-userinteract | Durable host questions or pending relay |
 | crabber-tools-catalog | Deterministic metadata, allowlists, Extension and host prelude |
 
 ## Host responsibilities
@@ -90,7 +89,7 @@ for secret redaction. Shell execution is not a sandbox. `required_permissions`
 is advisory; StaticPolicy matches tool names. Prefer `restrict_to_enabled: false`
 when mounting other tools, because restrictions apply to the entire run.
 
-Use one global root per agent, or Scope::Session for a shared agent. Multiple
+Use one shared root per agent, or StandardToolsFactory with host-owned WorkspaceAdmission for multiple workspaces. Multiple
 roots mounted globally collide on names. The persisted directory must match the
 admitted absolute root; AgentConfig's default `.` is rejected. Reopen the root
 handle after deleting and recreating a directory. Existing hard links and detached processes remain host concerns;
@@ -113,8 +112,8 @@ cargo run -p mount-standard --locked -- --check
 ```
 
 Tests use scripted providers, temporary workspaces, `sh`, and `rg` without
-credentials or network. CI runs Linux and macOS and a standalone consumer graph
-with crabber-extensions' command guard and a host tool. The consumer template
+credentials or network. CI runs Linux and macOS and a Git-only tools consumer with a custom extension, a custom host tool, and
+a reopened SQLite store. The consumer template
 substitutes the candidate SHA in both manifest and lockfile before `--locked`.
 
 The first deliverable for request `crabber-r-5fxy` is tagged `v0.1.0` at
@@ -135,19 +134,42 @@ there is no inherited tracker namespace. Keep the policy `None` when the tool is
 disabled. Missing required policies fail construction instead of omitting tools.
 Any supplied policy is validated, even for a disabled tool.
 
-Enabling `UserInteract` requires `user_interact: Some(UserInteractPolicy::pending())`
-or a `Surface::Prompter` policy; prompts never consume mount capacity. The pending
-surface relays questions and accepts a model-supplied `answer`; it is not a human
-gate and must not be treated as human consent. Use `Surface::Prompter` when a human
-must answer. `EnabledSet::eino_parity()` selects the eleven upstream tools and
-requires all three optional policies.
+Enabling `UserInteract` requires an explicit `UserInteractPolicy::durable(authority)`
+or `UserInteractPolicy::pending()`. Durable questions pause until the host records
+an authenticated answer through Crabber's interaction API. The pending surface
+relays questions and accepts a model-supplied `answer`; it does not establish human
+consent. Neither surface consumes mount capacity. `EnabledSet::eino_parity()`
+selects the eleven upstream tools and requires all three optional policies.
 
-The example mounts a workspace subset plus `user_interact` with a scripted
-prompter and leaves URL and tracker policies `None`; it requires no tracker installation or network. The all-tools catalog
-runtime test uses a synthetic bn backend and a confined file URL. Tracker writes
+The example mounts a workspace subset with a durable question and a scripted host
+answer loop. It needs no tracker installation, credentials or network. The all-tools
+catalog test uses a synthetic bn backend and a confined file URL. Tracker writes
 mutate the hub and are not retry-safe, but do not take the workspace writer lock.
-All fourteen tools share mount capacity except `user_interact`. Consumer `flows-guest` evidence and the owner's
-request-scope decision remain required before resolving the parent request.
+
+For multiple workspaces, register `StandardToolsFactory` once with root-free
+`Policies` and a host-owned `WorkspaceAdmission`. `ExactRoots` is an explicit
+workspace-ID/directory table. Admit new sessions through `prompt_keyed_in` with an
+`ExecutionContext`; `prompt_in` requires an existing session. The runnable
+[`contexts` example](examples/mount-standard/src/contexts.rs) exercises concurrent
+roots and targeted close. A shared single-root `StandardTools` remains available.
+Each workspace owns independent capacity; sessions in that workspace share it.
+
+```rust
+use crabber_tools_catalog::prelude::*;
+use std::{path::PathBuf, sync::Arc};
+# fn factory(policies: Policies, path: PathBuf) -> Result<StandardToolsFactory, crabber::ExtensionError> {
+let admission = ExactRoots::new([("project-a".into(), path)])?;
+let factory = StandardToolsFactory::new(policies, Arc::new(admission))?;
+# Ok(factory)
+# }
+```
+
+Every host must declare a stable `behavior_version`, changing it when configured
+behavior changes. Version 0.4.0 removes catalog `Options` and `Surface::Prompter`,
+uses the renamed `shared_tool`/`shared_extension` builders, and returns typed
+`ToolOutput`: failure envelopes persist as failed calls. Shell nonzero exits
+remain successful results. See [lifecycle and cleanup](docs/lifecycle.md) for
+resource ownership, interruption uncertainty, output bounds and restart limits.
 
 To materialize the standalone consumer outside this workspace, copy both the
 template and its canonical harness, then replace `CRABBER_TOOLS_REV` in the
@@ -156,7 +178,7 @@ scratch manifest and lockfile with the published commit SHA:
 ```sh
 probe_dir=$(mktemp -d)
 cp -R ci/consumer-probe/. "$probe_dir/"
-cp examples/mount-standard/src/probe.rs "$probe_dir/src/probe.rs"
+cp examples/mount-standard/src/probe.rs examples/mount-standard/src/contexts.rs "$probe_dir/src/"
 mkdir -p "$probe_dir/.cargo"
 cp .cargo/config.toml "$probe_dir/.cargo/"
 ```

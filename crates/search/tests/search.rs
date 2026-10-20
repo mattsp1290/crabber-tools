@@ -22,8 +22,10 @@ async fn call(o: Options, args: Value) -> Value {
     definition(Arc::new(o))
         .unwrap()
         .executor
-        .execute_with_context(context(&root, CancellationToken::new()), args)
+        .execute_owned_context(context(&root, CancellationToken::new()), args)
         .await
+        .unwrap()
+        .json_value()
         .unwrap()
 }
 #[tokio::test]
@@ -237,8 +239,7 @@ async fn config_disabled_and_environment_replaced() {
 #[tokio::test]
 async fn runtime_interrupt_reaps_group() {
     use crabber::{
-        Agent, FakeProvider, PermissionDecision, StaticPolicy,
-        core::{RunStatus, ToolCallStatus},
+        Agent, FakeProvider, PermissionDecision, StaticPolicy, core::ToolCallStatus,
         session::MemoryStore,
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -251,6 +252,7 @@ async fn runtime_interrupt_reaps_group() {
     o.policy.rg_binary = binary;
     let store = Arc::new(MemoryStore::new());
     let agent = Agent::builder()
+        .behavior_version(concat!("crabber-tools/", env!("CARGO_PKG_VERSION")))
         .store(store.clone())
         .provider(Arc::new(FakeProvider::scripted(vec![
             turn("search", json!({"pattern":"x"})),
@@ -258,17 +260,17 @@ async fn runtime_interrupt_reaps_group() {
         ])))
         .config(config(tmp.path()))
         .policy(Arc::new(StaticPolicy::new(PermissionDecision::Allow)))
-        .tool(definition(Arc::new(o)).unwrap())
+        .shared_tool(definition(Arc::new(o)).unwrap())
         .build()
         .unwrap();
     let run = agent.prompt(None, "interrupt").await.unwrap();
     let session = run.session_id().clone();
     wait_file(&tmp.path().join("child")).await;
     run.interrupt();
-    assert_eq!(run.done().await.unwrap().status, RunStatus::Interrupted);
+    support::assert_stopped_uncertain(run, &store).await;
     assert_eq!(
         calls(&store, &session).await[0].status,
-        ToolCallStatus::Interrupted
+        ToolCallStatus::Running
     );
     assert_gone(pid(&tmp.path().join("leader"))).await;
     assert_gone(pid(&tmp.path().join("child"))).await;

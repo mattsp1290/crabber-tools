@@ -3,7 +3,12 @@ use crabber_tools_core::*;
 use serde_json::{Value, json};
 use std::{os::unix::process::ExitStatusExt, process::Stdio, time::Duration};
 use tokio::{process::Command, time::Instant};
-pub(crate) async fn run(options: &Options, args: Args) -> Value {
+pub(crate) async fn run(
+    options: &Options,
+    args: Args,
+    ctx: &crabber::extension::ToolContext,
+    guards: impl Send + 'static,
+) -> Value {
     let start = Instant::now();
     let mut cmd = Command::new(&options.policy.shell_binary);
     cmd.arg(match options.policy.startup_mode {
@@ -15,18 +20,22 @@ pub(crate) async fn run(options: &Options, args: Args) -> Value {
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
     apply_policy(&mut cmd, &options.policy.env, options.policy.run_as);
-    let mut guard = match ProcessGroupGuard::spawn(&mut cmd) {
-        Ok(g) => g,
-        Err(_) => return failed(category::EXEC_FAILED, "could not start shell"),
-    };
-    let capture = match capture(
-        &mut guard,
+    let capture = match run_process_owned_guarded(
+        ctx,
+        cmd,
         options.policy.output_cap_bytes,
         start + Duration::from_secs(args.timeout_seconds),
+        guards,
     )
     .await
     {
         Ok(c) => c,
+        Err(ProcessRunError::Unavailable) => {
+            return failed(category::UNAVAILABLE, "call resources unavailable");
+        }
+        Err(ProcessRunError::Spawn) => {
+            return failed(category::EXEC_FAILED, "could not start shell");
+        }
         Err(_) => return failed(category::IO, "could not capture shell output"),
     };
     let code = capture

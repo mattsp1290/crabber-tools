@@ -61,14 +61,21 @@ fn envelope(result: Result<String, ToolError>) -> Value {
 }
 #[async_trait]
 impl ToolExecutor for FetchTool {
-    async fn execute(&self, _: Value) -> Result<Value, ExtensionError> {
-        Ok(failed("validation", "context required"))
+    async fn execute(&self, _: Value) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        crabber_tools_core::context_required()
     }
     async fn execute_with_context(
         &self,
         ctx: ToolContext,
         value: Value,
-    ) -> Result<Value, ExtensionError> {
+    ) -> Result<crabber::core::ToolOutput, ExtensionError> {
+        self.invoke(ctx, value)
+            .await
+            .map(|value| crabber_tools_core::to_output(value, &["content"]))
+    }
+}
+impl FetchTool {
+    async fn invoke(&self, ctx: ToolContext, value: Value) -> Result<Value, ExtensionError> {
         check_cancelled(&ctx.cancel)?;
         let args = match serde_json::from_value::<Args>(value) {
             Ok(args)
@@ -106,10 +113,9 @@ impl ToolExecutor for FetchTool {
                 };
             if url.scheme() == "file" {
                 let options = self.options.clone();
-                let cancel = ctx.cancel.clone();
-                run_blocking(&ctx.cancel, move || {
+                run_blocking_owned(&ctx, move |cancel| {
                     let _permit = permit;
-                    envelope(file::read(&options.root, &url, &cancel, start + TIMEOUT))
+                    envelope(file::read(&options.root, &url, cancel, start + TIMEOUT))
                 })
                 .await
             } else {

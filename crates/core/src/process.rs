@@ -143,6 +143,9 @@ impl ProcessGroupGuard {
             armed: true,
         })
     }
+    pub(crate) fn needs_cleanup(&self) -> bool {
+        self.armed
+    }
     /// The group's leader id, useful for lifecycle verification.
     pub fn pid(&self) -> u32 {
         self.pgid.as_raw_nonzero().get() as u32

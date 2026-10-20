@@ -38,6 +38,10 @@ impl ToolError {
 }
 /// Stable error category vocabulary.
 pub mod category {
+    /// Recorded host denial.
+    pub const DENIED: &str = "denied";
+    /// Recorded host cancellation.
+    pub const CANCELLED: &str = "cancelled";
     /// The `conflict` failure category.
     pub const CONFLICT: &str = "conflict";
     /// The `validation` failure category.
@@ -76,4 +80,52 @@ pub mod category {
 /// Build an envelope containing exactly outcome and error.
 pub fn failed(category: &'static str, message: impl Into<String>) -> Value {
     json!({"outcome":"failed","error": {"category":category,"message":message.into()}})
+}
+
+/// Convert an envelope to bounded typed output, preserving the failure status.
+/// Named text fields may be truncated to fit Crabber's serialized output bound.
+pub fn to_output(mut value: Value, truncatable: &[&str]) -> crabber::core::ToolOutput {
+    loop {
+        if let Ok(output) = crabber::core::ToolOutput::from_json(&value) {
+            return if value.get("outcome").and_then(Value::as_str) == Some("failed") {
+                output.with_error()
+            } else {
+                output
+            };
+        }
+        let longest = truncatable
+            .iter()
+            .filter_map(|key| {
+                value
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| (*key, s.len()))
+            })
+            .max_by_key(|(_, len)| *len);
+        if let Some((key, len)) = longest {
+            let text = value[key].as_str().expect("selected string");
+            let mut end = len / 2;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            value[key] = Value::String(text[..end].into());
+            value[format!("{key}_truncated")] = Value::Bool(true);
+        } else {
+            return crabber::core::ToolOutput::from_json(&failed(
+                category::TOO_LARGE,
+                "tool result exceeds the 4 MiB output bound",
+            ))
+            .expect("bounded failure envelope")
+            .with_error();
+        }
+    }
+}
+
+/// Fail closed when an executor is called without its host context.
+pub fn context_required() -> Result<crabber::core::ToolOutput, crabber::ExtensionError> {
+    Ok(to_output(
+        failed(category::VALIDATION, "context required"),
+        &[],
+    ))
 }
